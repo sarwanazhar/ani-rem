@@ -2,7 +2,7 @@
 
 # 🎌 ani-rem
 
-**A lightweight anime airing reminder for Linux — built in Go.**
+**A lightweight anime airing reminder for Linux (cli) — built in Go. (dashboard version comming soon)**
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
