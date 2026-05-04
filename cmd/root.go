@@ -1,13 +1,10 @@
 package cmd
 
 import (
-	"ani-rem/models"
 	"ani-rem/utils"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/manifoldco/promptui"
@@ -38,10 +35,9 @@ var startCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		// 2. The Worker Loop (This runs in the background)
 		for {
-			checkAiringAnime()
-			time.Sleep(1 * time.Minute)
+			utils.CheckAiringAnime()
+			time.Sleep(5 * time.Minute)
 		}
 	},
 }
@@ -70,32 +66,6 @@ var stopCmd = &cobra.Command{
 			fmt.Println("Failed to stop worker. It might have already exited.")
 		}
 	},
-}
-
-func checkAiringAnime() {
-	filePath := utils.GetStoragePath()
-	fileData, err := os.ReadFile(filePath)
-	if err != nil {
-		return
-	}
-
-	var animes []models.AnimeData
-	json.Unmarshal(fileData, &animes)
-
-	for _, anime := range animes {
-		if anime.Status == "Currently Airing" {
-			remaining := utils.GetTimeUntilAiring(anime.Status, anime.Broadcast.Time, anime.Broadcast.Day)
-
-			// Logic for different notification windows
-			if strings.Contains(remaining, "0h 30m") {
-				utils.SendNotification("30 Mins Left!", anime.Title+" airs in 30 minutes.")
-			} else if strings.Contains(remaining, "1h 0m") {
-				utils.SendNotification("1 Hour Left!", anime.Title+" airs in 1 hour.")
-			} else if strings.Contains(remaining, "24h 0m") {
-				utils.SendNotification("Airing Tomorrow", anime.Title+" airs in exactly 1 day.")
-			}
-		}
-	}
 }
 
 var rootCmd = &cobra.Command{
