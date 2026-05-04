@@ -15,25 +15,30 @@ var createCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new anime in the list",
 	Run: func(cmd *cobra.Command, args []string) {
-		// If flag is empty, prompt the user
 		if name == "" {
 			prompt := promptui.Prompt{
 				Label: "Enter Anime Name",
 			}
-
 			result, err := prompt.Run()
 			if err != nil {
 				if err == promptui.ErrInterrupt {
 					os.Exit(0)
 				}
-				fmt.Printf("Prompt failed %v\n", err)
+				fmt.Printf("Prompt failed: %v\n", err)
 				return
 			}
 			name = result
 		}
 
-		// Inside your Command Run function
-		results, _ := utils.SearchAnime(name)
+		results, err := utils.SearchAnime(name)
+		if err != nil {
+			fmt.Printf("Search error: %v\n", err)
+			return
+		}
+		if len(results) == 0 {
+			fmt.Println("No results found for that name.")
+			return
+		}
 
 		templates := &promptui.SelectTemplates{
 			Label:    "{{ . }}",
@@ -48,20 +53,30 @@ var createCmd = &cobra.Command{
 			Templates: templates,
 		}
 
-		i, _, _ := prompt.Run()
+		i, _, err := prompt.Run()
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				os.Exit(0)
+			}
+			fmt.Println("Selection cancelled.")
+			return
+		}
+		if i < 0 || i >= len(results) {
+			fmt.Println("Invalid selection.")
+			return
+		}
 		selectedAnime := results[i]
 
-		// 1. Create the action menu
 		actionPrompt := promptui.Select{
 			Label: "What would you like to do with " + selectedAnime.Title + "?",
 			Items: []string{"Confirm & Add to List", "Show Details", "Do Nothing"},
 		}
-
 		_, action, err := actionPrompt.Run()
 		if err != nil {
 			if err == promptui.ErrInterrupt {
 				os.Exit(0)
 			}
+			fmt.Println("Action cancelled.")
 			return
 		}
 
@@ -73,13 +88,11 @@ var createCmd = &cobra.Command{
 			} else {
 				fmt.Println("🚀 Added to your watch list!")
 			}
-
 		case "Show Details":
 			fmt.Printf("\n--- %s ---\n", selectedAnime.Title)
 			fmt.Printf("Status: %s | Score: %.2f\n", selectedAnime.Status, selectedAnime.Score)
 			fmt.Println("\nSynopsis:", selectedAnime.Synopsis)
 
-			// Recursive call or simple prompt to add after reading
 			confirmPrompt := promptui.Prompt{
 				Label:     "Add to list now? (y/N)",
 				IsConfirm: true,
@@ -88,20 +101,13 @@ var createCmd = &cobra.Command{
 				utils.SaveAnimeToList(selectedAnime)
 				fmt.Println("🚀 Added to your watch list!")
 			}
-
 		case "Do Nothing":
 			fmt.Println("Action cancelled.")
 		}
-
-		// YOUR CODE GOES HERE:
-		// This is where you start writing your custom logic!
 	},
 }
 
 func init() {
-	// Attach the command to the root
 	rootCmd.AddCommand(createCmd)
-
-	// Define the flag
 	createCmd.Flags().StringVarP(&name, "name", "n", "", "Name of the resource")
 }

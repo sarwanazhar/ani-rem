@@ -9,7 +9,7 @@
 [![API](https://img.shields.io/badge/Powered%20by-Jikan%20API-E85D8A?style=flat-square)](https://jikan.moe/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-Never miss an episode again. `ani-rem` runs silently in the background and fires a persistent desktop notification when your next episode is getting close.
+Never miss an episode again. `ani-rem` runs silently in the background, fires persistent desktop notifications when your next episode is getting close, and can sync your airing schedule directly to **Google Calendar**.
 
 </div>
 
@@ -22,6 +22,7 @@ Never miss an episode again. `ani-rem` runs silently in the background and fires
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Google Calendar Integration](#google-calendar-integration)
 - [Configuration & Storage](#configuration--storage)
 - [Adding to Startup Applications](#adding-to-startup-applications-linux-mint)
 - [Project Structure](#project-structure)
@@ -37,6 +38,8 @@ Never miss an episode again. `ani-rem` runs silently in the background and fires
 - 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the next 24 hours.
 - 🔕 **Notification Deduplication** — A lock-file system prevents duplicate alerts. Once a notification is sent for a show, it won't fire again for at least 1 hour.
 - 🕐 **JST → Local Time Conversion** — Converts Japanese Standard Time broadcast schedules to accurate local countdowns.
+- 📅 **Google Calendar Sync** — One-way sync your currently airing anime as recurring weekly events to any Google Calendar. Supports auto-sync from the background worker.
+- 🗑️ **Calendar Cleanup** — Remove specific anime events or clear all ani-rem events from your calendar in one go, with parallel deletion support.
 - 🛑 **Stop Command** — Kill the background daemon cleanly at any time.
 - 🖥️ **Interactive Main Menu** — Running `ani-rem` with no subcommand drops you into a Promptui main menu for all actions.
 
@@ -101,6 +104,21 @@ Jikan returns broadcast data like `day: "Saturdays"` and `time: "23:00"`. `ani-r
 4. If that time has already passed today, adding 7 days to get next week's airing.
 5. Returning the difference formatted as `"Next episode in Xh Ym"`.
 
+### Google Calendar Sync
+
+See the [Google Calendar Integration](#google-calendar-integration) section for full details. In summary:
+
+When you sync an anime, `ani-rem` creates a **recurring weekly event** in your chosen Google Calendar:
+
+- **Title:** `📺 <Anime Title> - New Episode`
+- **Duration:** 1 hour
+- **Recurrence:** Weekly for a configurable number of weeks (default: 12)
+- **Description:** Includes airing time, status, MAL score, truncated synopsis, and MAL ID
+- **Location:** `Online Streaming (Crunchyroll, Funimation, Netflix, etc.)`
+- **Duplicate Prevention:** Before syncing, `ani-rem` searches existing events and skips if the anime is already present. To update an existing schedule (e.g., change the number of weeks), remove it first with `ani-rem calendar remove`, then re-sync.
+
+The background worker supports **auto-sync** (`--auto-sync` flag) which runs once per day, keeping your calendar up-to-date with your watchlist automatically.
+
 ---
 
 ## Prerequisites
@@ -147,7 +165,7 @@ ani-rem --help
 ani-rem
 ```
 
-Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Exit.
+Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Exit.
 
 ---
 
@@ -200,6 +218,12 @@ ani-rem start
 
 Spawns a detached background worker that checks your watchlist every **5 minutes** and fires a desktop notification for any currently-airing show with an episode dropping within the next **24 hours**. Notifications are deduplicated — each show won't alert more than once per hour. Safe to run from a terminal, `.desktop` file, or startup script.
 
+**With auto-calendar-sync:**
+```bash
+ani-rem start --auto-sync
+```
+This will also sync your currently airing anime to Google Calendar **once per day** automatically (requires calendar to be connected first).
+
 ---
 
 ### `stop` — Kill the background daemon
@@ -222,15 +246,127 @@ Manually triggers a single pass of `CheckAiringAnime()` — the same logic the b
 
 ---
 
+## Google Calendar Integration
+
+`ani-rem` can sync your currently airing anime schedule to Google Calendar as recurring weekly events. This requires a one-time OAuth 2.0 setup.
+
+### Quick Setup
+
+```bash
+# Step 1: View the guided setup instructions
+ani-rem setup-calendar
+
+# Step 2: Connect your Google account
+ani-rem calendar connect
+# (You will be prompted for Client ID and Secret, then a browser opens for OAuth)
+
+# Step 3: Sync your airing anime
+ani-rem sync
+```
+
+### `setup-calendar` — Guided OAuth Setup
+
+```bash
+ani-rem setup-calendar
+```
+
+Prints step-by-step instructions for creating a Google Cloud Project, enabling the Google Calendar API, configuring the OAuth consent screen, and generating Desktop App credentials. No API calls are made — this is purely informational.
+
+---
+
+### `calendar` — Calendar Management Menu
+
+```bash
+ani-rem calendar
+```
+
+Opens an interactive menu with the following options:
+
+| Option | Description |
+|---|---|
+| 🔐 Connect / Sign in (`calendar connect`) | Authenticate with Google OAuth |
+| 📅 List my calendars | Show all calendars in your account |
+| 🔄 Sync anime to calendar (`sync`) | Jump to the `sync` command |
+| 🗑️ Clear all anime events (`calendar clear`) | Delete **all** events created by ani-rem |
+| ❌ Remove specific anime events (`calendar remove`) | Pick one anime and delete only its events |
+| 🚫 Disconnect (`calendar disconnect`) | Remove stored OAuth tokens (events stay in Google Calendar) |
+
+---
+
+### `calendar connect` — Authenticate
+
+```bash
+ani-rem calendar connect
+```
+
+Prompts for your Google OAuth Client ID and Client Secret, saves them to `~/.config/ani-rem/google_credentials.json`, then launches a local HTTP server on `localhost:8080` to handle the OAuth callback. A browser window opens automatically. After granting permission, your token is saved to `~/.config/ani-rem/google_token.json`.
+
+---
+
+### `calendar disconnect` — Remove Access
+
+```bash
+ani-rem calendar disconnect
+```
+
+Deletes the locally stored OAuth token. Your anime events remain in Google Calendar, but `ani-rem` will no longer be able to add or remove events until you re-authenticate.
+
+---
+
+### `sync` — Sync anime to Google Calendar
+
+```bash
+ani-rem sync              # Interactive mode — pick anime from your watchlist
+ani-rem sync --all        # Sync all currently airing anime
+ani-rem sync --anime "One Piece"   # Sync a specific anime by exact title
+ani-rem sync --weeks 24   # Schedule for the next 24 weeks (default: 12)
+ani-rem sync --calendar "your.calendar.id@gmail.com"  # Target a specific calendar
+```
+
+**Interactive mode** presents a menu of all your `"Currently Airing"` anime, plus an option to **Sync All**. After selection, you must confirm before events are created.
+
+**Duplicate prevention:** `ani-rem` searches your calendar for existing events with the same title before creating new ones. If found, the anime is skipped. To update an existing schedule (e.g., change the number of weeks), remove it first with `ani-rem calendar remove`, then re-sync.
+
+---
+
+### `calendar clear` — Delete all ani-rem events
+
+```bash
+ani-rem calendar clear
+# or force without confirmation:
+ani-rem calendar clear --force
+# or speed up deletion with parallel workers:
+ani-rem calendar clear --concurrency 8
+```
+
+Searches your primary calendar for all events whose summary contains `📺` and `- New Episode` (or whose description contains `Powered by ani-rem`), lists them, and asks for confirmation before deleting. Use `--force` / `-f` to skip the confirmation prompt. Use `--concurrency` / `-c` to control parallel deletion workers (default: 5).
+
+---
+
+### `calendar remove` — Delete events for a specific anime
+
+```bash
+ani-rem calendar remove
+```
+
+Shows a list of your currently airing anime from your local watchlist. Pick one, confirm, and all recurring events for that title will be removed from your primary calendar.
+
+---
+
 ## Configuration & Storage
 
 `ani-rem` stores everything locally — no account, no cloud, no telemetry.
 
-| Path | Contents |
-|---|---|
-| `~/.config/ani-rem/list.json` | Your saved watchlist |
-| `/tmp/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) |
-| `/tmp/notify_<Show_Name>.lock` | Per-show notification cooldown tracker (auto-managed) |
+| Path | Contents | Permissions |
+|---|---|---|
+| `~/.config/ani-rem/list.json` | Your saved watchlist | `0644` |
+| `~/.config/ani-rem/google_credentials.json` | Google OAuth Client ID & Secret | `0600` |
+| `~/.config/ani-rem/google_token.json` | Google OAuth access & refresh tokens | `0600` |
+| `/tmp/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0644` |
+| `/tmp/ani-rem-last-sync` | Timestamp of the last auto-sync (for daily deduplication) | `0644` |
+| `/tmp/notify_<Show_Name>.lock` | Per-show notification cooldown tracker (auto-managed) | `0644` |
+
+> **Security note:** `google_credentials.json` and `google_token.json` contain sensitive OAuth credentials and are stored with `0600` permissions (owner read/write only). Do not share or commit these files.
 
 **Example `list.json` entry:**
 
@@ -274,6 +410,8 @@ To have the daemon start automatically on login:
    | **Command** | `/home/<your-username>/go/bin/ani-rem start` |
    | **Comment** | `Anime airing reminder background worker` |
 
+   *(Add `--auto-sync` to the command if you want daily calendar sync too.)*
+
 3. Click **Add**, then **Close**.
 
 > Replace `<your-username>` with your actual username. Run `which ani-rem` to confirm the full path to the binary.
@@ -284,20 +422,26 @@ To have the daemon start automatically on login:
 
 ```
 ani-rem/
-├── main.go               # Entry point — calls cmd.Execute()
+├── main.go                    # Entry point — calls cmd.Execute()
 ├── cmd/
-│   ├── root.go           # Root command (interactive menu) + start & stop logic
-│   ├── create.go         # `create` subcommand — search & add anime
-│   ├── list.go           # `list` subcommand — view, detail, delete
-│   └── check.go          # `check` subcommand — manual one-off airing check
+│   ├── root.go                # Root command (interactive menu) + start & stop logic
+│   ├── create.go              # `create` subcommand — search & add anime
+│   ├── list.go                # `list` subcommand — view, detail, delete
+│   ├── check.go               # `check` subcommand — manual one-off airing check
+│   ├── calendar.go            # `calendar` subcommand — menu & connect/disconnect
+│   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
+│   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
+│   ├── clear.go               # `calendar clear` subcommand — bulk delete events
+│   └── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
 ├── utils/
 │   ├── search_anime.go        # Jikan API client
 │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
 │   ├── time.go                # JST broadcast string → local countdown
 │   ├── notify.go              # notify-send wrapper with deduplication logic
-│   └── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
+│   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
+│   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
 └── models/
-    └── models.go         # AnimeData, Broadcast, JikanResponse structs
+    └── models.go              # AnimeData, Broadcast, JikanResponse structs
 ```
 
 **Dependencies:**
@@ -306,6 +450,8 @@ ani-rem/
 |---|---|
 | [`github.com/spf13/cobra`](https://github.com/spf13/cobra) | CLI command structure |
 | [`github.com/manifoldco/promptui`](https://github.com/manifoldco/promptui) | Interactive terminal menus |
+| [`golang.org/x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) | Google OAuth 2.0 flow |
+| [`google.golang.org/api/calendar/v3`](https://pkg.go.dev/google.golang.org/api/calendar/v3) | Google Calendar API client |
 | Jikan API v4 | Anime metadata (no API key required) |
 | `notify-send` (system binary) | Desktop notification delivery |
 
@@ -315,4 +461,4 @@ ani-rem/
 
 Built by **Sarwan Azhar** - a 17-year-old full-stack developer.
 
-Anime data provided by the [Jikan API](https://jikan.moe/), an unofficial MyAnimeList API. Notifications via [`libnotify`](https://gitlab.gnome.org/GNOME/libnotify).
+Anime data provided by the [Jikan API](https://jikan.moe/), an unofficial MyAnimeList API. Notifications via [`libnotify`](https://gitlab.gnome.org/GNOME/libnotify). Calendar integration powered by the [Google Calendar API](https://developers.google.com/calendar).

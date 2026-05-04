@@ -5,47 +5,32 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 func SendNotification(name string, Time string) {
-
 	SendNotificationLogic(name, Time)
 }
 
-// ------------------------------------------
-// ------------------------------------------
-// ------------------------------------------
-// ------------------------------------------
-
 func ShouldSendNotification(name string) bool {
-	// 1. Sanitize the name to use as a filename
 	safeName := strings.ReplaceAll(name, " ", "_")
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("notify_%s.lock", safeName))
 
 	fileInfo, err := os.Stat(tmpFile)
-
-	// If file doesn't exist, we should definitely send it
 	if os.IsNotExist(err) {
 		return true
 	}
-
-	// 2. Check if the file is older than 2 hours
-	// If the difference between NOW and the LAST MODIFIED time is > 2h
 	if time.Since(fileInfo.ModTime()) > 1*time.Hour {
 		return true
 	}
-
-	// Otherwise, it's too soon
 	return false
 }
 
 func MarkAsSent(name string) {
 	safeName := strings.ReplaceAll(name, " ", "_")
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("notify_%s.lock", safeName))
-
-	// Create or update the timestamp of the file
 	_ = os.WriteFile(tmpFile, []byte("sent"), 0644)
 }
 
@@ -53,27 +38,32 @@ func SendNotificationLogic(name string, Time string) {
 	if ShouldSendNotification(name) {
 		fmt.Printf("Sending notification for: %s\n", name)
 
-		// Code to sent notification
-
-		// Create dynamic strings using fmt.Sprintf
 		title := fmt.Sprintf("Alert for %s", name)
 		message := fmt.Sprintf("Critical update: %s anime releasing soon in %s", name, Time)
 
-		// -u critical: Sets urgency to high
-		// -t 0: Sets timeout to 0 (won't expire)
 		cmd := exec.Command("notify-send",
 			"-u", "critical",
 			"-t", "0",
-			title,   // Using the dynamic title
-			message, // Using the dynamic message
+			title,
+			message,
 		)
 
-		// Keep environment variables for DBUS/Display access
-		cmd.Env = append(os.Environ(), "DISPLAY=:0", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus")
+		display := os.Getenv("DISPLAY")
+		if display == "" {
+			display = ":0"
+		}
 
-		err := cmd.Run()
-		if err != nil {
-			fmt.Printf("Error sending notification for %s: %s\n", name, err)
+		// Build D-Bus path dynamically using the current user's UID
+		uid := os.Getuid()
+		dbus := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+		if dbus == "" {
+			dbus = "unix:path=/run/user/" + strconv.Itoa(uid) + "/bus"
+		}
+
+		cmd.Env = append(os.Environ(), "DISPLAY="+display, "DBUS_SESSION_BUS_ADDRESS="+dbus)
+
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Error sending notification for %s: %v\n", name, err)
 		}
 
 		MarkAsSent(name)

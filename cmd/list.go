@@ -15,7 +15,6 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "View and manage your saved anime",
 	Run: func(cmd *cobra.Command, args []string) {
-		// Wrap everything in a loop for "Back" navigation
 		for {
 			filePath := utils.GetStoragePath()
 			fileData, err := os.ReadFile(filePath)
@@ -25,15 +24,16 @@ var listCmd = &cobra.Command{
 			}
 
 			var animes []models.AnimeData
-			json.Unmarshal(fileData, &animes)
+			if err := json.Unmarshal(fileData, &animes); err != nil {
+				fmt.Printf("Error parsing anime list: %v\n", err)
+				return
+			}
 
 			if len(animes) == 0 {
 				fmt.Println("Your list is empty.")
 				return
 			}
 
-			// 1. Prepare Menu Items
-			// We add Delete and Exit options at the end of the anime list
 			displayItems := append(animes, models.AnimeData{Title: "🗑️  Delete Entire List"})
 			displayItems = append(displayItems, models.AnimeData{Title: "➜ Exit to Menu"})
 
@@ -55,26 +55,24 @@ var listCmd = &cobra.Command{
 				return
 			}
 
-			// OPTION: Exit to Menu
+			// Exit to Menu
 			if index == len(displayItems)-1 {
 				return
 			}
 
-			// OPTION: Delete Entire List
+			// Delete Entire List
 			if index == len(animes) {
 				confirmPrompt := promptui.Prompt{
 					Label:     "Are you sure you want to delete the entire list file? (y/N)",
 					IsConfirm: true,
 				}
-
-				_, err := confirmPrompt.Run()
-				if err == nil {
+				if _, err := confirmPrompt.Run(); err == nil {
 					err := os.Remove(filePath)
 					if err != nil {
 						fmt.Printf("Error deleting file: %v\n", err)
 					} else {
 						fmt.Println("🔥 List file deleted successfully.")
-						return // Go back to main menu since file is gone
+						return
 					}
 				} else {
 					fmt.Println("Deletion cancelled.")
@@ -82,15 +80,13 @@ var listCmd = &cobra.Command{
 				}
 			}
 
-			// OPTION: Selected a specific Anime
+			// Selected a specific anime
 			selected := animes[index]
 
-			// 2. Action Menu for Selected Anime
 			actionPrompt := promptui.Select{
 				Label: "Actions for " + selected.Title,
 				Items: []string{"Show Details", "Delete from List", "Back"},
 			}
-
 			_, action, _ := actionPrompt.Run()
 
 			if action == "Back" {
@@ -98,17 +94,13 @@ var listCmd = &cobra.Command{
 			}
 
 			if action == "Show Details" {
-				// Pass the Status as the first argument
 				remaining := utils.GetTimeUntilAiring(selected.Status, selected.Broadcast.Time, selected.Broadcast.Day)
 
 				fmt.Printf("\n--- %s ---\n", selected.Title)
 				fmt.Printf("Status: %s\n", selected.Status)
-
-				// Only show the countdown if it's currently airing
 				if selected.Status == "Currently Airing" {
 					fmt.Printf("Next Airing: %s\n", remaining)
 				}
-
 				fmt.Println("\nSynopsis:", selected.Synopsis)
 				fmt.Println("\n(Press Enter to go back to list)")
 				fmt.Scanln()
@@ -117,8 +109,11 @@ var listCmd = &cobra.Command{
 
 			if action == "Delete from List" {
 				animes = append(animes[:index], animes[index+1:]...)
-				utils.UpdateFullList(animes)
-				fmt.Printf("🗑️  Deleted %s.\n", selected.Title)
+				if err := utils.UpdateFullList(animes); err != nil {
+					fmt.Printf("Error updating list: %v\n", err)
+				} else {
+					fmt.Printf("🗑️  Deleted %s.\n", selected.Title)
+				}
 				continue
 			}
 		}
