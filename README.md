@@ -35,11 +35,12 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - 🔍 **Interactive Search & Add** — Search anime by name via the Jikan API with a Promptui-driven interactive menu. Optionally view the synopsis before adding.
 - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
 - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
-- 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the next 24 hours.
+- 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
 - 🔕 **Notification Deduplication** — A lock-file system prevents duplicate alerts. Once a notification is sent for a show, it won't fire again for at least 1 hour.
 - 🕐 **JST → Local Time Conversion** — Converts Japanese Standard Time broadcast schedules to accurate local countdowns.
 - 📅 **Google Calendar Sync** — One-way sync your currently airing anime as recurring weekly events to any Google Calendar. Supports auto-sync from the background worker.
-- 🗑️ **Calendar Cleanup** — Remove specific anime events or clear all ani-rem events from your calendar in one go, with parallel deletion support.
+- 🗑️ **Calendar Cleanup** — Remove specific anime events or clear all ani-rem events from your calendar in one go.
+- ⚙️ **Configurable Settings** — Change notification threshold, toggle auto-sync, and manage preferences via an interactive menu or your `$EDITOR`.
 - 🛑 **Stop Command** — Kill the background daemon cleanly at any time.
 - 🖥️ **Interactive Main Menu** — Running `ani-rem` with no subcommand drops you into a Promptui main menu for all actions.
 
@@ -65,10 +66,10 @@ The parent process re-launches itself with `ANI_REM_CHILD=1` in its environment.
 
 ### Notification Threshold
 
-The worker calls `CheckAiringAnime()` every 5 minutes. For each `"Currently Airing"` show, it parses the countdown returned by `GetTimeUntilAiring()` into a `time.Duration` and fires a notification if the episode airs **within the next 24 hours**:
+The worker calls `CheckAiringAnime()` every 5 minutes. For each `"Currently Airing"` show, it parses the countdown returned by `GetTimeUntilAiring()` into a `time.Duration` and fires a notification if the episode airs within the configured threshold (default **24 hours**, customizable via `ani-rem config`):
 
 ```
-remaining < 24h  →  Send notification: "Critical update: <title> anime releasing soon in <duration>"
+remaining < threshold  →  Send notification: "Critical update: <title> anime releasing soon in <duration>"
 ```
 
 ### Notification Deduplication
@@ -117,7 +118,7 @@ When you sync an anime, `ani-rem` creates a **recurring weekly event** in your c
 - **Location:** `Online Streaming (Crunchyroll, Funimation, Netflix, etc.)`
 - **Duplicate Prevention:** Before syncing, `ani-rem` searches existing events and skips if the anime is already present. To update an existing schedule (e.g., change the number of weeks), remove it first with `ani-rem calendar remove`, then re-sync.
 
-The background worker supports **auto-sync** (`--auto-sync` flag) which runs once per day, keeping your calendar up-to-date with your watchlist automatically.
+The background worker supports **auto-sync** (`--auto-sync` flag or config toggle) which runs once per day, keeping your calendar up-to-date with your watchlist automatically.
 
 ---
 
@@ -139,7 +140,12 @@ sudo apt update && sudo apt install libnotify-bin
 ## Installation
 
 ```bash
-go install github.com/sarwan/ani-rem@latest
+# Clone the repository
+git clone https://github.com/sarwanazhar/ani-rem.git
+cd ani-rem
+
+# Build and install
+go build && go install
 ```
 
 This places the binary in `~/go/bin/`. Make sure that directory is in your `$PATH`:
@@ -165,7 +171,7 @@ ani-rem --help
 ani-rem
 ```
 
-Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Exit.
+Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
 
 ---
 
@@ -216,7 +222,7 @@ Synopsis: ...
 ani-rem start
 ```
 
-Spawns a detached background worker that checks your watchlist every **5 minutes** and fires a desktop notification for any currently-airing show with an episode dropping within the next **24 hours**. Notifications are deduplicated — each show won't alert more than once per hour. Safe to run from a terminal, `.desktop` file, or startup script.
+Spawns a detached background worker that checks your watchlist every **5 minutes** and fires a desktop notification for any currently-airing show with an episode dropping within the configured notification threshold (default: **24 hours**). Notifications are deduplicated — each show won't alert more than once per hour. Safe to run from a terminal, `.desktop` file, or startup script.
 
 **With auto-calendar-sync:**
 ```bash
@@ -242,7 +248,33 @@ Reads `/tmp/ani-rem.pid` and kills the running worker process. If no PID file is
 ani-rem check
 ```
 
-Manually triggers a single pass of `CheckAiringAnime()` — the same logic the background daemon runs. Prints countdown info to the terminal and sends notifications for any currently-airing show within the next 24 hours (subject to the 1-hour deduplication cooldown).
+Manually triggers a single pass of `CheckAiringAnime()` — the same logic the background daemon runs. Prints countdown info to the terminal and sends notifications for any currently-airing show within the notification threshold (subject to the 1-hour deduplication cooldown).
+
+---
+
+### `config` — Manage settings
+
+```bash
+ani-rem config
+```
+
+Opens an interactive settings menu where you can:
+
+| Option | Description |
+|---|---|
+| 📄 View current settings | Display the current configuration as JSON |
+| ✏️ Edit settings in `$EDITOR` | Open `~/.config/ani-rem/config.json` in your default editor |
+| 🔄 Auto-sync toggle | Enable/disable daily auto-sync to Google Calendar |
+| ⏰ Change notification threshold | Set how many hours before airing to trigger notifications (default: 24) |
+
+**Configuration file** (`~/.config/ani-rem/config.json`):
+```json
+{
+  "auto_sync": false,
+  "calendar_id": "",
+  "notification_threshold_hours": 24
+}
+```
 
 ---
 
@@ -335,11 +367,9 @@ ani-rem sync --calendar "your.calendar.id@gmail.com"  # Target a specific calend
 ani-rem calendar clear
 # or force without confirmation:
 ani-rem calendar clear --force
-# or speed up deletion with parallel workers:
-ani-rem calendar clear --concurrency 8
 ```
 
-Searches your primary calendar for all events whose summary contains `📺` and `- New Episode` (or whose description contains `Powered by ani-rem`), lists them, and asks for confirmation before deleting. Use `--force` / `-f` to skip the confirmation prompt. Use `--concurrency` / `-c` to control parallel deletion workers (default: 5).
+Searches your primary calendar for all events whose summary contains `📺` and `- New Episode` (or whose description contains `Powered by ani-rem`), lists them, and asks for confirmation before deleting. Use `--force` / `-f` to skip the confirmation prompt.
 
 ---
 
@@ -360,9 +390,10 @@ Shows a list of your currently airing anime from your local watchlist. Pick one,
 | Path | Contents | Permissions |
 |---|---|---|
 | `~/.config/ani-rem/list.json` | Your saved watchlist | `0644` |
+| `~/.config/ani-rem/config.json` | App settings (auto-sync, threshold, calendar ID) | `0644` |
 | `~/.config/ani-rem/google_credentials.json` | Google OAuth Client ID & Secret | `0600` |
 | `~/.config/ani-rem/google_token.json` | Google OAuth access & refresh tokens | `0600` |
-| `/tmp/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0644` |
+| `/tmp/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0600` |
 | `/tmp/ani-rem-last-sync` | Timestamp of the last auto-sync (for daily deduplication) | `0644` |
 | `/tmp/notify_<Show_Name>.lock` | Per-show notification cooldown tracker (auto-managed) | `0644` |
 
@@ -424,10 +455,11 @@ To have the daemon start automatically on login:
 ani-rem/
 ├── main.go                    # Entry point — calls cmd.Execute()
 ├── cmd/
-│   ├── root.go                # Root command (interactive menu) + start & stop logic
+│   ├── root.go                # Root command (interactive menu) + start, stop & auto-sync logic
 │   ├── create.go              # `create` subcommand — search & add anime
 │   ├── list.go                # `list` subcommand — view, detail, delete
 │   ├── check.go               # `check` subcommand — manual one-off airing check
+│   ├── config.go              # `config` subcommand — settings management
 │   ├── calendar.go            # `calendar` subcommand — menu & connect/disconnect
 │   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
 │   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
@@ -436,6 +468,7 @@ ani-rem/
 ├── utils/
 │   ├── search_anime.go        # Jikan API client
 │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
+│   ├── config.go              # Configuration file handling (load/save defaults)
 │   ├── time.go                # JST broadcast string → local countdown
 │   ├── notify.go              # notify-send wrapper with deduplication logic
 │   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications

@@ -11,6 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// displayItem extends AnimeData with a calculated "Remaining" countdown.
+type displayItem struct {
+	models.AnimeData
+	Remaining string
+}
+
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "View and manage your saved anime",
@@ -34,15 +40,26 @@ var listCmd = &cobra.Command{
 				return
 			}
 
-			displayItems := append(animes, models.AnimeData{Title: "🗑️  Delete Entire List"})
-			displayItems = append(displayItems, models.AnimeData{Title: "➜ Exit to Menu"})
+			// Build a uniform slice of displayItem (no more mixed types)
+			var items []displayItem
+			for _, a := range animes {
+				item := displayItem{AnimeData: a}
+				if a.Status == "Currently Airing" {
+					item.Remaining = utils.GetTimeUntilAiring(a.Status, a.Broadcast.Time, a.Broadcast.Day)
+				}
+				items = append(items, item)
+			}
+			// Append special entries as displayItem with only Title set
+			items = append(items, displayItem{AnimeData: models.AnimeData{Title: "🗑️  Delete Entire List"}})
+			items = append(items, displayItem{AnimeData: models.AnimeData{Title: "➜ Exit to Menu"}})
 
 			prompt := promptui.Select{
 				Label: "Your Watchlist",
-				Items: displayItems,
+				Items: items,
 				Templates: &promptui.SelectTemplates{
-					Active:   "➤ {{ .Title | cyan }}",
-					Inactive: "  {{ .Title }}",
+					Label:    "{{ . }}",
+					Active:   "➤ {{ .Title | cyan }}{{ if .Remaining }} {{ .Remaining | yellow }}{{ end }}",
+					Inactive: "  {{ .Title }}{{ if .Remaining }} - {{ .Remaining }}{{ end }}",
 					Selected: "✔ {{ .Title | green }}",
 				},
 			}
@@ -55,12 +72,10 @@ var listCmd = &cobra.Command{
 				return
 			}
 
-			// Exit to Menu
-			if index == len(displayItems)-1 {
-				return
+			// Handle special entries (they are appended after the anime)
+			if index == len(animes)+1 {
+				return // Exit to Menu
 			}
-
-			// Delete Entire List
 			if index == len(animes) {
 				confirmPrompt := promptui.Prompt{
 					Label:     "Are you sure you want to delete the entire list file? (y/N)",
@@ -81,7 +96,7 @@ var listCmd = &cobra.Command{
 			}
 
 			// Selected a specific anime
-			selected := animes[index]
+			selected := items[index]
 
 			actionPrompt := promptui.Select{
 				Label: "Actions for " + selected.Title,
@@ -102,14 +117,24 @@ var listCmd = &cobra.Command{
 					fmt.Printf("Next Airing: %s\n", remaining)
 				}
 				fmt.Println("\nSynopsis:", selected.Synopsis)
-				fmt.Println("\n(Press Enter to go back to list)")
-				fmt.Scanln()
+
+				// Use promptui's Prompt to pause without breaking terminal state
+				pause := promptui.Prompt{
+					Label:       "Press Enter to go back to list",
+					AllowEdit:   false,
+					HideEntered: true,
+				}
+				pause.Run()
 				continue
 			}
 
 			if action == "Delete from List" {
-				animes = append(animes[:index], animes[index+1:]...)
-				if err := utils.UpdateFullList(animes); err != nil {
+				// Re‑read the raw list to delete precisely
+				fileData, _ := os.ReadFile(filePath)
+				var raw []models.AnimeData
+				json.Unmarshal(fileData, &raw)
+				raw = append(raw[:index], raw[index+1:]...)
+				if err := utils.UpdateFullList(raw); err != nil {
 					fmt.Printf("Error updating list: %v\n", err)
 				} else {
 					fmt.Printf("🗑️  Deleted %s.\n", selected.Title)

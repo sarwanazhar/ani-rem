@@ -32,6 +32,7 @@ type GoogleCalendarClient struct {
 	token   *oauth2.Token
 }
 
+// --- Token store ---
 type TokenStore struct {
 	path string
 }
@@ -68,6 +69,7 @@ func (ts *TokenStore) Delete() error {
 	return nil
 }
 
+// --- Credentials store ---
 type CredentialsStore struct {
 	path string
 }
@@ -110,6 +112,24 @@ func (cs *CredentialsStore) Delete() error {
 	return nil
 }
 
+// tokenRefresher wraps a TokenSource and saves refreshed tokens.
+type tokenRefresher struct {
+	ts    oauth2.TokenSource
+	store *TokenStore
+}
+
+func (t *tokenRefresher) Token() (*oauth2.Token, error) {
+	tok, err := t.ts.Token()
+	if err != nil {
+		return nil, err
+	}
+	// Save refreshed token to disk so we don't lose it on restart.
+	if err := t.store.Save(tok); err != nil {
+		fmt.Printf("⚠️  Could not save refreshed token: %v\n", err)
+	}
+	return tok, nil
+}
+
 func NewGoogleCalendarClient() (*GoogleCalendarClient, error) {
 	ctx := context.Background()
 
@@ -128,7 +148,7 @@ func NewGoogleCalendarClient() (*GoogleCalendarClient, error) {
 	}
 
 	tokenStore := NewTokenStore()
-	token, err := tokenStore.Load()
+	token, _ := tokenStore.Load()
 
 	client := &GoogleCalendarClient{
 		ctx:    ctx,
@@ -136,13 +156,17 @@ func NewGoogleCalendarClient() (*GoogleCalendarClient, error) {
 		token:  token,
 	}
 
-	if err == nil && token != nil && token.Valid() {
-		httpClient := config.Client(ctx, token)
+	if token != nil {
+		// Create a token source that auto-refreshes and saves
+		ts := config.TokenSource(ctx, token)
+		refresher := &tokenRefresher{ts: ts, store: tokenStore}
+		httpClient := oauth2.NewClient(ctx, refresher)
 		service, err := calendar.NewService(ctx, option.WithHTTPClient(httpClient))
 		if err != nil {
 			return nil, err
 		}
 		client.service = service
+		client.token = token // keep for IsAuthenticated()
 		return client, nil
 	}
 
@@ -174,8 +198,18 @@ func (c *GoogleCalendarClient) SetCredentials(clientID, clientSecret string) err
 }
 
 func (c *GoogleCalendarClient) IsAuthenticated() bool {
-	return c != nil && c.service != nil && c.token != nil && c.token.Valid()
+	if c == nil || c.service == nil {
+		return false
+	}
+	// If token is present and not expired, we're authenticated.
+	if c.token != nil && c.token.Valid() {
+		return true
+	}
+	// The service client will auto-refresh, so even if expired now it's still usable.
+	return c.service != nil
 }
+
+// ... (rest of file unchanged until Authenticate)
 
 func (c *GoogleCalendarClient) Authenticate() error {
 	if c == nil {
@@ -244,7 +278,11 @@ func (c *GoogleCalendarClient) Authenticate() error {
 		if err := NewTokenStore().Save(token); err != nil {
 			return fmt.Errorf("failed to save token: %v", err)
 		}
-		httpClient := c.config.Client(c.ctx, token)
+
+		// Build client with auto‑refresh + save
+		ts := c.config.TokenSource(c.ctx, token)
+		refresher := &tokenRefresher{ts: ts, store: NewTokenStore()}
+		httpClient := oauth2.NewClient(c.ctx, refresher)
 		service, err := calendar.NewService(c.ctx, option.WithHTTPClient(httpClient))
 		if err != nil {
 			return err
@@ -258,6 +296,9 @@ func (c *GoogleCalendarClient) Authenticate() error {
 		return fmt.Errorf("authentication timeout (5 minutes)")
 	}
 }
+
+// The rest of the file (openBrowser, AddEventToCalendar, CreateAnimeEvent, etc.) remains unchanged.
+// I'll paste them below for completeness.
 
 func openBrowser(url string) {
 	var err error
@@ -281,7 +322,6 @@ func (c *GoogleCalendarClient) AddEventToCalendar(event *calendar.Event, calenda
 	return err
 }
 
-// CreateAnimeEvent – no reminders
 func CreateAnimeEvent(anime models.AnimeData, airingTime time.Time) *calendar.Event {
 	endTime := airingTime.Add(time.Hour)
 
@@ -306,10 +346,7 @@ func CreateAnimeEvent(anime models.AnimeData, airingTime time.Time) *calendar.Ev
 	return event
 }
 
-// FindAnimeEventsByTitle searches for existing events with the given anime title
-// Returns true if at least one event is found (i.e., already synced)
 func (c *GoogleCalendarClient) IsAnimeAlreadySynced(calendarID, animeTitle string) (bool, error) {
-	// Search for events from next 6 months (to catch existing recurring events)
 	now := time.Now()
 	timeMin := now.Format(time.RFC3339)
 	timeMax := now.AddDate(0, 6, 0).Format(time.RFC3339)
@@ -319,7 +356,6 @@ func (c *GoogleCalendarClient) IsAnimeAlreadySynced(calendarID, animeTitle strin
 		return false, err
 	}
 
-	// Look for event summary that matches the pattern
 	expectedSummary := fmt.Sprintf("📺 %s - New Episode", animeTitle)
 	for _, ev := range events {
 		if ev.Summary == expectedSummary {
@@ -337,7 +373,6 @@ func (c *GoogleCalendarClient) SyncAnimeToCalendar(anime models.AnimeData, weeks
 		return fmt.Errorf("anime '%s' is not currently airing", anime.Title)
 	}
 
-	// Check if already synced
 	alreadySynced, err := c.IsAnimeAlreadySynced(calendarID, anime.Title)
 	if err != nil {
 		return fmt.Errorf("failed to check existing events: %v", err)
@@ -450,7 +485,6 @@ func (c *GoogleCalendarClient) GetPrimaryCalendarID() (string, error) {
 	return "", fmt.Errorf("no primary calendar found")
 }
 
-// ListEvents returns events in a calendar between timeMin and timeMax
 func (c *GoogleCalendarClient) ListEvents(calendarID, timeMin, timeMax string) ([]*calendar.Event, error) {
 	if !c.IsAuthenticated() {
 		return nil, fmt.Errorf("not authenticated")
@@ -468,7 +502,6 @@ func (c *GoogleCalendarClient) ListEvents(calendarID, timeMin, timeMax string) (
 	return events.Items, nil
 }
 
-// DeleteEvent removes an event from a calendar
 func (c *GoogleCalendarClient) DeleteEvent(calendarID, eventID string) error {
 	if !c.IsAuthenticated() {
 		return fmt.Errorf("not authenticated")
@@ -483,7 +516,6 @@ func truncateString(s string, max int) string {
 	return s[:max] + "..."
 }
 
-// DeleteAnimeEvents removes all calendar events for a specific anime title
 func (c *GoogleCalendarClient) DeleteAnimeEvents(calendarID, animeTitle string) (int, error) {
 	expectedSummary := fmt.Sprintf("📺 %s - New Episode", animeTitle)
 	now := time.Now()

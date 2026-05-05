@@ -5,17 +5,33 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// sanitizeForFilename replaces any character that is unsafe for filenames.
+func sanitizeForFilename(name string) string {
+	// Keep only alphanumeric, underscores, hyphens, and dots.
+	reg := regexp.MustCompile(`[^\w\.-]`)
+	safe := reg.ReplaceAllString(name, "_")
+	// Collapse multiple underscores and trim
+	reg2 := regexp.MustCompile(`_+`)
+	safe = reg2.ReplaceAllString(safe, "_")
+	safe = strings.Trim(safe, "_")
+	if safe == "" {
+		safe = "unnamed"
+	}
+	return safe
+}
 
 func SendNotification(name string, Time string) {
 	SendNotificationLogic(name, Time)
 }
 
 func ShouldSendNotification(name string) bool {
-	safeName := strings.ReplaceAll(name, " ", "_")
+	safeName := sanitizeForFilename(name)
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("notify_%s.lock", safeName))
 
 	fileInfo, err := os.Stat(tmpFile)
@@ -29,7 +45,7 @@ func ShouldSendNotification(name string) bool {
 }
 
 func MarkAsSent(name string) {
-	safeName := strings.ReplaceAll(name, " ", "_")
+	safeName := sanitizeForFilename(name)
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("notify_%s.lock", safeName))
 	_ = os.WriteFile(tmpFile, []byte("sent"), 0644)
 }
@@ -53,14 +69,16 @@ func SendNotificationLogic(name string, Time string) {
 			display = ":0"
 		}
 
-		// Build D-Bus path dynamically using the current user's UID
 		uid := os.Getuid()
 		dbus := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
 		if dbus == "" {
 			dbus = "unix:path=/run/user/" + strconv.Itoa(uid) + "/bus"
 		}
 
-		cmd.Env = append(os.Environ(), "DISPLAY="+display, "DBUS_SESSION_BUS_ADDRESS="+dbus)
+		cmd.Env = append(os.Environ(),
+			"DISPLAY="+display,
+			"DBUS_SESSION_BUS_ADDRESS="+dbus,
+		)
 
 		if err := cmd.Run(); err != nil {
 			fmt.Printf("Error sending notification for %s: %v\n", name, err)

@@ -16,7 +16,11 @@ func GetTimeUntilAiring(status string, broadcastTime string, broadcastDay string
 		return "Airing schedule unavailable"
 	}
 
-	loc, _ := time.LoadLocation("Asia/Tokyo")
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		// Fallback to fixed offset if timezone data is missing
+		loc = time.FixedZone("JST", 9*60*60)
+	}
 	now := time.Now().In(loc)
 
 	targetDay, ok := BroadcastDayMap[broadcastDay]

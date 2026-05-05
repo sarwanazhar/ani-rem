@@ -83,7 +83,8 @@ var startCmd = &cobra.Command{
 		fmt.Println("Background worker running...")
 		for {
 			utils.CheckAiringAnime()
-			if autoSync {
+			// Use config flag if auto‑sync is enabled at start or via config
+			if autoSync || isAutoSyncEnabled() {
 				syncOnceADay()
 			}
 			time.Sleep(5 * time.Minute)
@@ -126,6 +127,7 @@ var rootCmd = &cobra.Command{
 					"Start Background Worker",
 					"Stop Background Worker",
 					"📅 Google Calendar",
+					"⚙️  Settings",
 					"Exit",
 				},
 			}
@@ -147,6 +149,8 @@ var rootCmd = &cobra.Command{
 				stopCmd.Run(stopCmd, args)
 			case "📅 Google Calendar":
 				calendarCmd.Run(calendarCmd, args)
+			case "⚙️  Settings":
+				configCmd.Run(configCmd, args)
 			case "Exit":
 				os.Exit(0)
 			}
@@ -165,6 +169,15 @@ func Execute() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+// isAutoSyncEnabled checks config, returns true if auto‑sync is on.
+func isAutoSyncEnabled() bool {
+	cfg, err := utils.LoadConfig()
+	if err != nil {
+		return false
+	}
+	return cfg.AutoSync
 }
 
 func syncOnceADay() {
@@ -211,10 +224,15 @@ func syncOnceADay() {
 		return
 	}
 
-	calendarID, err := client.GetPrimaryCalendarID()
-	if err != nil {
-		fmt.Printf("Auto-sync: cannot get primary calendar: %v\n", err)
-		return
+	cfg, _ := utils.LoadConfig()
+	calendarID := cfg.CalendarID
+	if calendarID == "" {
+		id, err := client.GetPrimaryCalendarID()
+		if err != nil {
+			fmt.Printf("Auto-sync: cannot get primary calendar: %v\n", err)
+			return
+		}
+		calendarID = id
 	}
 
 	err = client.SyncMultipleAnime(airing, 12, calendarID)

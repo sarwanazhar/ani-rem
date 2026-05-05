@@ -23,6 +23,14 @@ func CheckAiringAnime() {
 		return
 	}
 
+	// Load config to get the notification threshold (in hours)
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Printf("Could not load config, using default threshold (24h): %v\n", err)
+		cfg = defaultConfig()
+	}
+	thresholdDuration := time.Duration(cfg.NotificationThresholdHours) * time.Hour
+
 	for _, anime := range animes {
 		if anime.Status != "Currently Airing" {
 			continue
@@ -38,11 +46,11 @@ func CheckAiringAnime() {
 		d, err := time.ParseDuration(cleanDuration)
 		if err != nil {
 			fmt.Printf("Error parsing duration for %s: %v\n", anime.Title, err)
-			continue // skip only this anime, not the whole loop
+			continue
 		}
 
-		if d < 24*time.Hour {
-			fmt.Println("Status: Episode drops in less than 24 hours!")
+		if d < thresholdDuration {
+			fmt.Printf("Status: Episode drops in less than %d hours!\n", cfg.NotificationThresholdHours)
 			SendNotification(anime.Title, cleanDuration)
 		}
 
