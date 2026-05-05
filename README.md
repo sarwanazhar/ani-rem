@@ -23,6 +23,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - [Installation](#installation)
 - [Usage](#usage)
 - [Google Calendar Integration](#google-calendar-integration)
+- [Discord Notifications](#discord-notifications)
 - [Configuration & Storage](#configuration--storage)
 - [Adding to Startup Applications](#adding-to-startup-applications)
 - [Project Structure](#project-structure)
@@ -40,8 +41,9 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - 🔕 **Notification Deduplication** — A lock-file system prevents duplicate alerts. Once a notification is sent for a show, it won't fire again for at least 1 hour.
 - 🕐 **JST → Local Time Conversion** — Converts Japanese Standard Time broadcast schedules to accurate local countdowns.
 - 📅 **Google Calendar Sync** — One-way sync your currently airing anime as recurring weekly events to any Google Calendar. Supports auto-sync from the background worker.
+- 🎌 **Discord Webhook Notifications** — Send rich embed notifications to a Discord channel via webhook when episodes are about to air. Includes MAL score, countdown, and direct links.
 - 🗑️ **Calendar Cleanup** — Remove specific anime events or clear all ani-rem events from your calendar in one go.
-- ⚙️ **Configurable Settings** — Change notification threshold, toggle auto-sync, and manage preferences via an interactive menu or your `$EDITOR`.
+- ⚙️ **Configurable Settings** — Change notification threshold, toggle auto-sync, manage Discord webhook, and manage preferences via an interactive menu or your `$EDITOR`.
 - 🛑 **Stop Command** — Kill the background daemon cleanly at any time.
 - 🖥️ **Interactive Main Menu** — Running `ani-rem` with no subcommand drops you into a Promptui main menu for all actions.
 - 🖥️ **Cross-Platform Support** — Works on **Linux**, **macOS**, and **Windows** with native desktop notifications on each platform.
@@ -121,6 +123,18 @@ When you sync an anime, `ani-rem` creates a **recurring weekly event** in your c
 
 The background worker supports **auto-sync** (`--auto-sync` flag or config toggle) which runs once per day, keeping your calendar up-to-date with your watchlist automatically.
 
+### Discord Webhook Notifications
+
+`ani-rem` can send rich embed notifications to a Discord channel of your choice when an episode is about to air. The notification includes:
+
+- **Title:** `🎌 New Episode Alert! @everyone`
+- **Anime title** and **countdown** until the episode drops
+- **MAL score** with color-coded embed (green ≥ 8.0, yellow ≥ 6.0, red < 6.0)
+- **Direct link** to the anime's MyAnimeList page
+- **Powered by ani-rem** footer
+
+Setup is done entirely through the interactive menu — no config file editing required. Notifications are deduplicated using the same 1-hour lock-file system as desktop notifications.
+
 ---
 
 ## Prerequisites
@@ -172,7 +186,7 @@ ani-rem --help
 ani-rem
 ```
 
-Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
+Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Discord Notifications, Google Calendar, Settings, Exit.
 
 ---
 
@@ -314,7 +328,9 @@ Opens an interactive settings menu where you can:
 {
   "auto_sync": false,
   "calendar_id": "",
-  "notification_threshold_hours": 24
+  "notification_threshold_hours": 24,
+  "discord_webhook_url": "",
+  "discord_enabled": false
 }
 ```
 
@@ -425,6 +441,70 @@ Shows a list of your currently airing anime from your local watchlist. Pick one,
 
 ---
 
+## Discord Notifications
+
+`ani-rem` can send rich embed notifications to a Discord channel via webhook when an episode is about to air. This is perfect for:
+- Sharing alerts with friends in a private server
+- Getting notifications on mobile via the Discord app
+- Creating a dedicated anime alerts channel
+
+### Quick Setup
+
+```bash
+ani-rem discord
+```
+
+This opens an interactive menu where you can:
+
+1. **🔗 Setup / Update Webhook URL** — Paste your Discord webhook URL
+2. **🔔 Toggle Notifications** — Enable or disable Discord alerts
+3. **🧪 Test Connection** — Verify your webhook is working
+
+### Creating a Discord Webhook
+
+If you don't have a webhook URL yet, the interactive menu will guide you through:
+
+1. **Create a Private Server**
+   - Open Discord and click the `+` (Add a Server) icon
+   - Choose "Create My Own" → "For me and my friends"
+   - Name it something like "Ani-Rem Alerts"
+
+2. **Create a Channel**
+   - In your new server, click `+` next to "Text Channels"
+   - Name it `updates` (or anything you like)
+
+3. **Generate Webhook**
+   - Hover over the channel → click Settings (Gear Icon)
+   - Click "Integrations" → "Webhooks" → "New Webhook"
+   - Rename to "Ani-Rem Bot" (optional)
+   - Click "Copy Webhook URL" and paste it into `ani-rem`
+
+### Notification Format
+
+When enabled, `ani-rem` sends a rich Discord embed every time an episode is about to air:
+
+```
+🎌 New Episode Alert! @everyone
+
+🎬 Dandadan
+⏰ Episode releasing in 4h 22m
+⭐ Score: 8.7/10
+🔗 View on MyAnimeList
+
+Powered by ani-rem
+```
+
+The embed color changes based on MAL score:
+- 🟢 **Green** — Score ≥ 8.0
+- 🟡 **Yellow** — Score ≥ 6.0
+- 🔴 **Red** — Score < 6.0
+
+### Deduplication
+
+Discord notifications share the same 1-hour deduplication lock as desktop notifications. Once a Discord alert is sent for a show, it won't fire again for at least 1 hour — even if the background worker checks every 5 minutes.
+
+---
+
 ## Configuration & Storage
 
 `ani-rem` stores everything locally — no account, no cloud, no telemetry.
@@ -432,7 +512,7 @@ Shows a list of your currently airing anime from your local watchlist. Pick one,
 | Path | Contents | Permissions |
 |---|---|---|
 | `~/.config/ani-rem/list.json` | Your saved watchlist | `0644` |
-| `~/.config/ani-rem/config.json` | App settings (auto-sync, threshold, calendar ID) | `0644` |
+| `~/.config/ani-rem/config.json` | App settings (auto-sync, threshold, calendar ID, Discord) | `0644` |
 | `~/.config/ani-rem/google_credentials.json` | Google OAuth Client ID & Secret | `0600` |
 | `~/.config/ani-rem/google_token.json` | Google OAuth access & refresh tokens | `0600` |
 | `{temp}/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0600` |
@@ -550,14 +630,15 @@ ani-rem/
 │   ├── clear.go               # `calendar clear` subcommand — bulk delete events
 │   ├── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
 │   ├── seasonal.go            # `seasonal` subcommand — browse and add seasonal anime
-│   └── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
+│   ├── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
+│   └── discord.go             # `discord` subcommand — webhook setup & management
 ├── utils/
 │   ├── search_anime.go        # Jikan API client for search
 │   ├── seasonal_anime.go      # Jikan seasonal API client & bulk add logic
 │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
 │   ├── config.go              # Configuration file handling (load/save defaults)
 │   ├── time.go                # JST broadcast string → local countdown
-│   ├── notify.go              # Cross-platform desktop notifications with deduplication
+│   ├── notify.go              # Cross-platform desktop + Discord notifications with deduplication
 │   ├── check_airing_anime.go  # Core check loop — parses countdowns, triggers notifications
 │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
 └── models/
