@@ -10,13 +10,11 @@ import (
 	"strings"
 )
 
-// verifyProcess checks if a process with the given PID is running (Windows).
 func verifyProcess(pid string) error {
 	p, err := strconv.Atoi(pid)
 	if err != nil {
 		return err
 	}
-	// Use tasklist to see if the PID exists
 	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", p))
 	output, err := cmd.Output()
 	if err != nil {
@@ -28,15 +26,9 @@ func verifyProcess(pid string) error {
 	return nil
 }
 
-// killProcess terminates a process with the given PID (Windows).
 func killProcess(pid string) error {
-	// taskkill /F is the force-kill equivalent
 	cmd := exec.Command("taskkill", "/F", "/PID", pid)
 	return cmd.Run()
 }
 
-// setDetachAttr is a no‑op on Windows; the process already runs
-// independently if launched with cmd.Start().
-func setDetachAttr(cmd *exec.Cmd) {
-	// No special attributes needed for Windows.
-}
+func setDetachAttr(cmd *exec.Cmd) {}

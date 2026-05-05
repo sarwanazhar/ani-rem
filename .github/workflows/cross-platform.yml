@@ -16,17 +16,35 @@ jobs:
           go-version: '1.25.0'
           cache: true
           
-      - name: Build & Verify
-        shell: bash  # Use bash for cross-platform compatibility
+      - name: Build & Verify (with debug)
+        shell: bash
         run: |
           go mod tidy
-          go build -o ani-rem
+          echo "=== Building binary ==="
+          go build -v -o ani-rem
+          echo "=== Files after build ==="
+          ls -la
+          # On Windows, also show dir via cmd for clarity
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            echo "=== DIR from cmd ==="
+            cmd.exe /c "dir"
+          fi
           
       - name: Test Binary
         shell: bash
         run: |
           if [ "$RUNNER_OS" == "Windows" ]; then
-            ./ani-rem.exe version
+            # Try both possible executable names
+            if [ -f "ani-rem.exe" ]; then
+              echo "Found ani-rem.exe, running version..."
+              ./ani-rem.exe version
+            elif [ -f "ani-rem" ]; then
+              echo "Found ani-rem (no .exe), running version..."
+              ./ani-rem version
+            else
+              echo "ERROR: No ani-rem binary found!"
+              exit 1
+            fi
           else
             ./ani-rem version
           fi

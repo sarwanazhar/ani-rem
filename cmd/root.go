@@ -31,7 +31,7 @@ var startCmd = &cobra.Command{
 			child := exec.Command(os.Args[0], childArgs...)
 			child.Env = append(os.Environ(), "ANI_REM_CHILD=1")
 
-			// Platform‑specific detach (Setpgid on Unix, no‑op on Windows)
+			// Platform‑specific detach (uses process_windows.go or process_unix.go)
 			setDetachAttr(child)
 
 			if err := child.Start(); err != nil {
@@ -39,7 +39,7 @@ var startCmd = &cobra.Command{
 				return
 			}
 
-			// Wait up to 2 seconds for child to write its PID file
+			// Wait for child to write PID file
 			pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
 			var pidData []byte
 			for i := 0; i < 20; i++ {
@@ -55,7 +55,7 @@ var startCmd = &cobra.Command{
 				return
 			}
 
-			// Verify the process exists (cross-platform)
+			// Verify process (cross‑platform)
 			pidStr := string(pidData)
 			if err := verifyProcess(pidStr); err != nil {
 				fmt.Printf("⚠️ Worker started but process %s is not responding.\n", pidStr)
@@ -67,7 +67,7 @@ var startCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		// Child: set up signal handling for graceful shutdown
+		// Child: signal handling (SIGTERM/SIGINT exist on all platforms)
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		go func() {
@@ -76,7 +76,7 @@ var startCmd = &cobra.Command{
 			os.Exit(0)
 		}()
 
-		// Write PID file with restrictive permissions
+		// Write PID file
 		pid := os.Getpid()
 		pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
 		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
@@ -107,7 +107,6 @@ var stopCmd = &cobra.Command{
 		pid := string(pidData)
 		fmt.Printf("Stopping worker (PID %s)...\n", pid)
 
-		// This function is defined in process_unix.go or process_windows.go
 		if err := killProcess(pid); err == nil {
 			os.Remove(pidFile)
 			fmt.Println("🛑 Worker stopped.")
@@ -188,7 +187,6 @@ func Execute() {
 	}
 }
 
-// isAutoSyncEnabled checks config, returns true if auto‑sync is on.
 func isAutoSyncEnabled() bool {
 	cfg, err := utils.LoadConfig()
 	if err != nil {
