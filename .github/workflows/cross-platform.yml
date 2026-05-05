@@ -1,0 +1,30 @@
+name: Cross-Platform Build & Verify
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+          
+      - name: Build & Verify
+        run: |
+          go mod tidy
+          go build -o ani-rem
+          ./ani-rem version
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ani-rem-${{ matrix.os }}
+          path: ani-rem
+          if-no-files-found: error

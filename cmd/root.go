@@ -9,6 +9,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,13 +34,18 @@ var startCmd = &cobra.Command{
 			child := exec.Command(os.Args[0], childArgs...)
 			child.Env = append(os.Environ(), "ANI_REM_CHILD=1")
 
+			// Detach process on Unix-like systems
+			if runtime.GOOS != "windows" {
+				child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			}
+
 			if err := child.Start(); err != nil {
 				fmt.Printf("Failed to start background worker: %v\n", err)
 				return
 			}
 
 			// Wait up to 2 seconds for child to write its PID file
-			pidFile := os.TempDir() + "/ani-rem.pid"
+			pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
 			var pidData []byte
 			for i := 0; i < 20; i++ {
 				time.Sleep(100 * time.Millisecond)
@@ -52,10 +60,9 @@ var startCmd = &cobra.Command{
 				return
 			}
 
-			// Verify the process exists
+			// Verify the process exists (cross-platform)
 			pidStr := string(pidData)
-			checkCmd := exec.Command("kill", "-0", pidStr)
-			if err := checkCmd.Run(); err != nil {
+			if err := verifyProcess(pidStr); err != nil {
 				fmt.Printf("⚠️ Worker started but process %s is not responding.\n", pidStr)
 				return
 			}
@@ -70,20 +77,20 @@ var startCmd = &cobra.Command{
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		go func() {
 			<-sigCh
-			os.Remove(os.TempDir() + "/ani-rem.pid")
+			os.Remove(filepath.Join(os.TempDir(), "ani-rem.pid"))
 			os.Exit(0)
 		}()
 
-		// Write PID file with restrictive permissions (only owner readable)
+		// Write PID file with restrictive permissions
 		pid := os.Getpid()
-		if err := os.WriteFile(os.TempDir()+"/ani-rem.pid", []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
+		pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
+		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
 			fmt.Printf("Warning: could not write PID file: %v\n", err)
 		}
 
 		fmt.Println("Background worker running...")
 		for {
 			utils.CheckAiringAnime()
-			// Use config flag if auto‑sync is enabled at start or via config
 			if autoSync || isAutoSyncEnabled() {
 				syncOnceADay()
 			}
@@ -96,17 +103,17 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the background reminder worker",
 	Run: func(cmd *cobra.Command, args []string) {
-		pidData, err := os.ReadFile(os.TempDir() + "/ani-rem.pid")
+		pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
+		pidData, err := os.ReadFile(pidFile)
 		if err != nil {
 			fmt.Println("No active worker found (or PID file missing).")
 			return
 		}
 		pid := string(pidData)
 		fmt.Printf("Stopping worker (PID %s)...\n", pid)
-		killCmd := exec.Command("kill", pid)
-		err = killCmd.Run()
-		if err == nil {
-			os.Remove(os.TempDir() + "/ani-rem.pid")
+
+		if err := killProcess(pid); err == nil {
+			os.Remove(pidFile)
 			fmt.Println("🛑 Worker stopped.")
 		} else {
 			fmt.Println("Failed to stop worker. It might have already exited.")
@@ -142,7 +149,7 @@ var rootCmd = &cobra.Command{
 			switch result {
 			case "Search & Add Anime":
 				createCmd.Run(createCmd, args)
-			case "📺 Browse Seasonal Anime": // ← NEW
+			case "📺 Browse Seasonal Anime":
 				seasonalCmd.Run(seasonalCmd, args)
 			case "View My Watchlist":
 				listCmd.Run(listCmd, args)
@@ -257,4 +264,52 @@ func syncOnceADay() {
 
 	_ = os.WriteFile(lastSyncFile, []byte(time.Now().String()), 0644)
 	fmt.Println("Auto-sync completed.")
+}
+
+// verifyProcess checks if a process with the given PID is running (cross-platform)
+func verifyProcess(pid string) error {
+	p, err := strconv.Atoi(pid)
+	if err != nil {
+		return err
+	}
+
+	if runtime.GOOS == "windows" {
+		// On Windows, try to query the process via tasklist
+		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", p))
+		output, err := cmd.Output()
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(output), pid) {
+			return fmt.Errorf("process not found")
+		}
+		return nil
+	}
+
+	// Unix-like: use kill -0 to check if process exists
+	return syscall.Kill(p, 0)
+}
+
+// killProcess terminates a process with the given PID (cross-platform)
+func killProcess(pid string) error {
+	p, err := strconv.Atoi(pid)
+	if err != nil {
+		return err
+	}
+
+	if runtime.GOOS == "windows" {
+		// Windows: use taskkill
+		cmd := exec.Command("taskkill", "/F", "/PID", pid)
+		return cmd.Run()
+	}
+
+	// Unix-like: use syscall.Kill with SIGTERM, then SIGKILL if needed
+	if err := syscall.Kill(p, syscall.SIGTERM); err != nil {
+		return err
+	}
+	// Give it a moment to terminate gracefully
+	time.Sleep(500 * time.Millisecond)
+	// Force kill if still running (ignore errors as process may already be gone)
+	syscall.Kill(p, syscall.SIGKILL)
+	return nil
 }

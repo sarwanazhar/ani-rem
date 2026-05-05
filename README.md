@@ -2,10 +2,10 @@
 
 # 🎌 ani-rem
 
-**A lightweight anime airing reminder for Linux (cli) — built in Go.**
+**A lightweight anime airing reminder for Linux, macOS & Windows (CLI) — built in Go.**
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
-[![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-2E8B57?style=flat-square&logo=linux&logoColor=white)](https://www.linux.org/)
 [![API](https://img.shields.io/badge/Powered%20by-Jikan%20API-E85D8A?style=flat-square)](https://jikan.moe/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
@@ -24,7 +24,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - [Usage](#usage)
 - [Google Calendar Integration](#google-calendar-integration)
 - [Configuration & Storage](#configuration--storage)
-- [Adding to Startup Applications](#adding-to-startup-applications-linux-mint)
+- [Adding to Startup Applications](#adding-to-startup-applications)
 - [Project Structure](#project-structure)
 - [Credits](#credits)
 
@@ -36,7 +36,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - 📅 **Seasonal Anime Browser** — Browse and bulk-add anime from the current or any specific season (winter, spring, summer, fall). Multi-select interface with filtering options.
 - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
 - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
-- 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
+- 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a desktop notification for any currently-airing show with an episode dropping within the configured threshold (default: 24 hours).
 - 🔕 **Notification Deduplication** — A lock-file system prevents duplicate alerts. Once a notification is sent for a show, it won't fire again for at least 1 hour.
 - 🕐 **JST → Local Time Conversion** — Converts Japanese Standard Time broadcast schedules to accurate local countdowns.
 - 📅 **Google Calendar Sync** — One-way sync your currently airing anime as recurring weekly events to any Google Calendar. Supports auto-sync from the background worker.
@@ -44,6 +44,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 - ⚙️ **Configurable Settings** — Change notification threshold, toggle auto-sync, and manage preferences via an interactive menu or your `$EDITOR`.
 - 🛑 **Stop Command** — Kill the background daemon cleanly at any time.
 - 🖥️ **Interactive Main Menu** — Running `ani-rem` with no subcommand drops you into a Promptui main menu for all actions.
+- 🖥️ **Cross-Platform Support** — Works on **Linux**, **macOS**, and **Windows** with native desktop notifications on each platform.
 
 ---
 
@@ -63,38 +64,37 @@ ani-rem start
     └─► YES ─► Enter the worker loop (checks every 5 minutes)
 ```
 
-The parent process re-launches itself with `ANI_REM_CHILD=1` in its environment. The child runs the worker loop detached from your terminal. `ani-rem stop` reads `/tmp/ani-rem.pid` and sends `kill <PID>` to shut it down.
+The parent process re-launches itself with `ANI_REM_CHILD=1` in its environment. The child runs the worker loop detached from your terminal. `ani-rem stop` reads the PID file and sends the appropriate signal to shut it down.
 
 ### Notification Threshold
 
 The worker calls `CheckAiringAnime()` every 5 minutes. For each `"Currently Airing"` show, it parses the countdown returned by `GetTimeUntilAiring()` into a `time.Duration` and fires a notification if the episode airs within the configured threshold (default **24 hours**, customizable via `ani-rem config`):
 
 ```
-remaining < threshold  →  Send notification: "Critical update: <title> anime releasing soon in <duration>"
+remaining < threshold  →  Send notification: "ani-rem: <title> — Episode releasing soon in <duration>"
 ```
 
 ### Notification Deduplication
 
-To avoid spamming you every 5 minutes, `ani-rem` uses a lock-file per show stored in `/tmp`:
+To avoid spamming you every 5 minutes, `ani-rem` uses a lock-file per show stored in the OS temp directory:
 
 | File | Purpose |
 |---|---|
-| `/tmp/notify_<Show_Name>.lock` | Timestamp of the last sent notification |
+| `{temp}/notify_<Show_Name>.lock` | Timestamp of the last sent notification |
 
 Before sending, `ShouldSendNotification()` checks whether the lock file is older than **1 hour**. If it was sent recently, the notification is skipped and a log line is printed instead. After a successful send, `MarkAsSent()` touches the lock file to reset the timer.
 
-### Notifications from a Background Process
+### Cross-Platform Notifications
 
-Since the daemon runs outside any interactive session, `notify-send` needs to know which display and D-Bus session to target. `ani-rem` injects these explicitly:
+`ani-rem` uses [`github.com/gen2brain/beeep`](https://github.com/gen2brain/beeep) for cross-platform desktop notifications, with platform-specific fallbacks:
 
-```go
-cmd.Env = append(os.Environ(),
-    "DISPLAY=:0",
-    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
-)
-```
+| Platform | Primary Method | Fallback |
+|---|---|---|
+| **Linux** | `beeep.Notify()` | `notify-send` with explicit `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` |
+| **macOS** | `beeep.Notify()` | `osascript` display notification |
+| **Windows** | `beeep.Notify()` | PowerShell `Windows.UI.Notifications` toast |
 
-The `-u critical` flag makes notifications **persistent** — they stay on screen until dismissed.
+On Linux, the `-u critical` flag makes notifications **persistent** — they stay on screen until dismissed.
 
 ### JST Time Conversion
 
@@ -127,10 +127,10 @@ The background worker supports **auto-sync** (`--auto-sync` flag or config toggl
 
 | Requirement | Purpose | Install |
 |---|---|---|
-| **Go 1.21+** | Build & install the tool | [go.dev/dl](https://go.dev/dl/) |
-| **libnotify-bin** | Provides `notify-send` for desktop alerts | See below |
+| **Go 1.25+** | Build & install the tool | [go.dev/dl](https://go.dev/dl/) |
+| **libnotify-bin** *(Linux only)* | Provides `notify-send` for desktop alerts fallback | See below |
 
-**Install `libnotify-bin`:**
+**Install `libnotify-bin` (Linux):**
 
 ```bash
 sudo apt update && sudo apt install libnotify-bin
@@ -264,7 +264,7 @@ Synopsis: ...
 ani-rem start
 ```
 
-Spawns a detached background worker that checks your watchlist every **5 minutes** and fires a desktop notification for any currently-airing show with an episode dropping within the configured notification threshold (default: **24 hours**). Notifications are deduplicated — each show won't alert more than once per hour. Safe to run from a terminal, `.desktop` file, or startup script.
+Spawns a detached background worker that checks your watchlist every **5 minutes** and fires a desktop notification for any currently-airing show with an episode dropping within the configured notification threshold (default: **24 hours**). Notifications are deduplicated — each show won't alert more than once per hour. Safe to run from a terminal, startup script, or OS startup application settings.
 
 **With auto-calendar-sync:**
 ```bash
@@ -280,7 +280,7 @@ This will also sync your currently airing anime to Google Calendar **once per da
 ani-rem stop
 ```
 
-Reads `/tmp/ani-rem.pid` and kills the running worker process. If no PID file is found, it reports that no active worker was found.
+Reads the PID file and terminates the running worker process. If no PID file is found, it reports that no active worker was found.
 
 ---
 
@@ -435,9 +435,9 @@ Shows a list of your currently airing anime from your local watchlist. Pick one,
 | `~/.config/ani-rem/config.json` | App settings (auto-sync, threshold, calendar ID) | `0644` |
 | `~/.config/ani-rem/google_credentials.json` | Google OAuth Client ID & Secret | `0600` |
 | `~/.config/ani-rem/google_token.json` | Google OAuth access & refresh tokens | `0600` |
-| `/tmp/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0600` |
-| `/tmp/ani-rem-last-sync` | Timestamp of the last auto-sync (for daily deduplication) | `0644` |
-| `/tmp/notify_<Show_Name>.lock` | Per-show notification cooldown tracker (auto-managed) | `0644` |
+| `{temp}/ani-rem.pid` | PID of the running background daemon (auto-created on start, deleted on stop) | `0600` |
+| `{temp}/ani-rem-last-sync` | Timestamp of the last auto-sync (for daily deduplication) | `0644` |
+| `{temp}/notify_<Show_Name>.lock` | Per-show notification cooldown tracker (auto-managed) | `0644` |
 
 > **Security note:** `google_credentials.json` and `google_token.json` contain sensitive OAuth credentials and are stored with `0600` permissions (owner read/write only). Do not share or commit these files.
 
@@ -466,7 +466,9 @@ Duplicate entries are prevented automatically — if you try to add an anime who
 
 ---
 
-## Adding to Startup Applications (Linux Mint)
+## Adding to Startup Applications
+
+### Linux Mint / GNOME
 
 To have the daemon start automatically on login:
 
@@ -488,6 +490,46 @@ To have the daemon start automatically on login:
 3. Click **Add**, then **Close**.
 
 > Replace `<your-username>` with your actual username. Run `which ani-rem` to confirm the full path to the binary.
+
+### macOS
+
+1. Open **System Settings → General → Login Items**.
+2. Click **+** and add the `ani-rem` binary path.
+3. Alternatively, create a LaunchAgent plist at `~/Library/LaunchAgents/com.ani-rem.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ani-rem</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ani-rem</string>
+        <string>start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Then run:
+```bash
+launchctl load ~/Library/LaunchAgents/com.ani-rem.plist
+```
+
+### Windows
+
+1. Press `Win + R`, type `shell:startup`, and press Enter.
+2. Create a shortcut to `ani-rem.exe` with the `start` argument:
+   ```
+   C:\path	oni-rem.exe start
+   ```
+3. Alternatively, use Task Scheduler to run `ani-rem start` at logon.
 
 ---
 
@@ -515,8 +557,8 @@ ani-rem/
 │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
 │   ├── config.go              # Configuration file handling (load/save defaults)
 │   ├── time.go                # JST broadcast string → local countdown
-│   ├── notify.go              # notify-send wrapper with deduplication logic
-│   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
+│   ├── notify.go              # Cross-platform desktop notifications with deduplication
+│   ├── check_airing_anime.go  # Core check loop — parses countdowns, triggers notifications
 │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
 └── models/
     └── models.go              # AnimeData, Broadcast, JikanResponse, SeasonalResponse, SeasonListItem structs
@@ -530,13 +572,14 @@ ani-rem/
 | [`github.com/manifoldco/promptui`](https://github.com/manifoldco/promptui) | Interactive terminal menus |
 | [`golang.org/x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) | Google OAuth 2.0 flow |
 | [`google.golang.org/api/calendar/v3`](https://pkg.go.dev/google.golang.org/api/calendar/v3) | Google Calendar API client |
+| [`github.com/gen2brain/beeep`](https://github.com/gen2brain/beeep) | Cross-platform desktop notifications |
 | Jikan API v4 | Anime metadata (no API key required) |
-| `notify-send` (system binary) | Desktop notification delivery |
+| `notify-send` *(Linux fallback)* | Desktop notification delivery |
 
 ---
 
 ## Credits
 
-Built by **Sarwan Azhar** - a 17-year-old full-stack developer.
+Built by **Sarwan Azhar** — a 17-year-old full-stack developer.
 
-Anime data provided by the [Jikan API](https://jikan.moe/), an unofficial MyAnimeList API. Notifications via [`libnotify`](https://gitlab.gnome.org/GNOME/libnotify). Calendar integration powered by the [Google Calendar API](https://developers.google.com/calendar).
+Anime data provided by the [Jikan API](https://jikan.moe/), an unofficial MyAnimeList API. Cross-platform notifications via [`beeep`](https://github.com/gen2brain/beeep). Calendar integration powered by the [Google Calendar API](https://developers.google.com/calendar).

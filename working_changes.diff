@@ -1,238 +1,621 @@
-diff --git a/README.md b/README.md
-index 5b6dd77..a5b13e2 100644
---- a/README.md
-+++ b/README.md
-@@ -2,7 +2,7 @@
- 
- # 🎌 ani-rem
- 
--**A lightweight anime airing reminder for Linux (cli) — built in Go. (dashboard version coming soon)**
-+**A lightweight anime airing reminder for Linux (cli) — built in Go.**
- 
- [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
- [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
-@@ -33,6 +33,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
- ## Features
- 
- - 🔍 **Interactive Search & Add** — Search anime by name via the Jikan API with a Promptui-driven interactive menu. Optionally view the synopsis before adding.
-+- 📅 **Seasonal Anime Browser** — Browse and bulk-add anime from the current or any specific season (winter, spring, summer, fall). Multi-select interface with filtering options.
- - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
- - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
- - 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
-@@ -171,7 +172,7 @@ ani-rem --help
- ani-rem
- ```
- 
--Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
-+Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
- 
- ---
- 
-@@ -191,6 +192,47 @@ Opens an interactive search powered by the Jikan API. After selecting a result y
- 
- ---
- 
-+### `seasonal` — Browse seasonal anime
-+
-+```bash
-+ani-rem seasonal                    # Browse current season
-+ani-rem seasonal --year 2024 --season spring
-+ani-rem seasonal --filter           # Show only currently airing
-+ani-rem seasonal --page 2           # Navigate pages
-+```
-+
-+Browse anime from any season with an interactive multi-select interface:
-+
-+- Navigate with arrow keys, press **Enter** to select/deselect anime
-+- View synopsis and details for each show
-+- Bulk add selected anime to your watchlist
-+- Filter to show only currently airing shows
-+
-+**Interactive controls:**
-+- `☑/☐` — Toggle selection
-+- `✅ Add Selected to Watchlist` — Confirm and add all selected
-+- `🔄 Select All / Deselect All` — Toggle all items at once
-+
-+---
-+
-+### `seasonal bulk` — Quick bulk-add seasonal anime
-+
-+```bash
-+ani-rem seasonal bulk                    # Interactive multi-select
-+ani-rem seasonal bulk --all              # Add all currently airing
-+ani-rem seasonal bulk --min-score 7.5    # Filter by minimum score
-+ani-rem seasonal bulk --yes              # Skip confirmation prompt
-+```
-+
-+A streamlined interface for quickly adding multiple current-season shows:
-+
-+- `--all` / `-a` — Automatically select all currently airing anime
-+- `--min-score` / `-m` — Filter by minimum MAL score (0-10)
-+- `--yes` / `-y` — Skip the confirmation prompt
-+- `--filter` / `-f` — Only show currently airing anime
-+
-+---
-+
- ### `list` — View and manage your watchlist
- 
- ```bash
-@@ -464,9 +506,12 @@ ani-rem/
- │   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
- │   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
- │   ├── clear.go               # `calendar clear` subcommand — bulk delete events
--│   └── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
-+│   ├── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
-+│   ├── seasonal.go            # `seasonal` subcommand — browse and add seasonal anime
-+│   └── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
- ├── utils/
--│   ├── search_anime.go        # Jikan API client
-+│   ├── search_anime.go        # Jikan API client for search
-+│   ├── seasonal_anime.go      # Jikan seasonal API client & bulk add logic
- │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
- │   ├── config.go              # Configuration file handling (load/save defaults)
- │   ├── time.go                # JST broadcast string → local countdown
-@@ -474,7 +519,7 @@ ani-rem/
- │   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
- │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
- └── models/
--    └── models.go              # AnimeData, Broadcast, JikanResponse structs
-+    └── models.go              # AnimeData, Broadcast, JikanResponse, SeasonalResponse, SeasonListItem structs
- ```
- 
- **Dependencies:**
 diff --git a/cmd/root.go b/cmd/root.go
-index 329e289..5e8268b 100644
+index 5e8268b..69d87ac 100644
 --- a/cmd/root.go
 +++ b/cmd/root.go
-@@ -123,6 +123,7 @@ var rootCmd = &cobra.Command{
- 				Label: "Main Menu",
- 				Items: []string{
- 					"Search & Add Anime",
-+					"📺 Browse Seasonal Anime",
- 					"View My Watchlist",
- 					"Start Background Worker",
- 					"Stop Background Worker",
-@@ -141,6 +142,8 @@ var rootCmd = &cobra.Command{
+@@ -9,6 +9,9 @@ import (
+ 	"os/exec"
+ 	"os/signal"
+ 	"path/filepath"
++	"runtime"
++	"strconv"
++	"strings"
+ 	"syscall"
+ 	"time"
+ 
+@@ -31,13 +34,18 @@ var startCmd = &cobra.Command{
+ 			child := exec.Command(os.Args[0], childArgs...)
+ 			child.Env = append(os.Environ(), "ANI_REM_CHILD=1")
+ 
++			// Detach process on Unix-like systems
++			if runtime.GOOS != "windows" {
++				child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++			}
++
+ 			if err := child.Start(); err != nil {
+ 				fmt.Printf("Failed to start background worker: %v\n", err)
+ 				return
+ 			}
+ 
+ 			// Wait up to 2 seconds for child to write its PID file
+-			pidFile := os.TempDir() + "/ani-rem.pid"
++			pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
+ 			var pidData []byte
+ 			for i := 0; i < 20; i++ {
+ 				time.Sleep(100 * time.Millisecond)
+@@ -52,10 +60,9 @@ var startCmd = &cobra.Command{
+ 				return
+ 			}
+ 
+-			// Verify the process exists
++			// Verify the process exists (cross-platform)
+ 			pidStr := string(pidData)
+-			checkCmd := exec.Command("kill", "-0", pidStr)
+-			if err := checkCmd.Run(); err != nil {
++			if err := verifyProcess(pidStr); err != nil {
+ 				fmt.Printf("⚠️ Worker started but process %s is not responding.\n", pidStr)
+ 				return
+ 			}
+@@ -70,20 +77,20 @@ var startCmd = &cobra.Command{
+ 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+ 		go func() {
+ 			<-sigCh
+-			os.Remove(os.TempDir() + "/ani-rem.pid")
++			os.Remove(filepath.Join(os.TempDir(), "ani-rem.pid"))
+ 			os.Exit(0)
+ 		}()
+ 
+-		// Write PID file with restrictive permissions (only owner readable)
++		// Write PID file with restrictive permissions
+ 		pid := os.Getpid()
+-		if err := os.WriteFile(os.TempDir()+"/ani-rem.pid", []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
++		pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
++		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
+ 			fmt.Printf("Warning: could not write PID file: %v\n", err)
+ 		}
+ 
+ 		fmt.Println("Background worker running...")
+ 		for {
+ 			utils.CheckAiringAnime()
+-			// Use config flag if auto‑sync is enabled at start or via config
+ 			if autoSync || isAutoSyncEnabled() {
+ 				syncOnceADay()
+ 			}
+@@ -96,17 +103,17 @@ var stopCmd = &cobra.Command{
+ 	Use:   "stop",
+ 	Short: "Stop the background reminder worker",
+ 	Run: func(cmd *cobra.Command, args []string) {
+-		pidData, err := os.ReadFile(os.TempDir() + "/ani-rem.pid")
++		pidFile := filepath.Join(os.TempDir(), "ani-rem.pid")
++		pidData, err := os.ReadFile(pidFile)
+ 		if err != nil {
+ 			fmt.Println("No active worker found (or PID file missing).")
+ 			return
+ 		}
+ 		pid := string(pidData)
+ 		fmt.Printf("Stopping worker (PID %s)...\n", pid)
+-		killCmd := exec.Command("kill", pid)
+-		err = killCmd.Run()
+-		if err == nil {
+-			os.Remove(os.TempDir() + "/ani-rem.pid")
++
++		if err := killProcess(pid); err == nil {
++			os.Remove(pidFile)
+ 			fmt.Println("🛑 Worker stopped.")
+ 		} else {
+ 			fmt.Println("Failed to stop worker. It might have already exited.")
+@@ -142,7 +149,7 @@ var rootCmd = &cobra.Command{
  			switch result {
  			case "Search & Add Anime":
  				createCmd.Run(createCmd, args)
-+			case "📺 Browse Seasonal Anime": // ← NEW
-+				seasonalCmd.Run(seasonalCmd, args)
+-			case "📺 Browse Seasonal Anime": // ← NEW
++			case "📺 Browse Seasonal Anime":
+ 				seasonalCmd.Run(seasonalCmd, args)
  			case "View My Watchlist":
  				listCmd.Run(listCmd, args)
- 			case "Start Background Worker":
-@@ -158,7 +161,18 @@ var rootCmd = &cobra.Command{
- 	},
+@@ -258,3 +265,51 @@ func syncOnceADay() {
+ 	_ = os.WriteFile(lastSyncFile, []byte(time.Now().String()), 0644)
+ 	fmt.Println("Auto-sync completed.")
  }
++
++// verifyProcess checks if a process with the given PID is running (cross-platform)
++func verifyProcess(pid string) error {
++	p, err := strconv.Atoi(pid)
++	if err != nil {
++		return err
++	}
++
++	if runtime.GOOS == "windows" {
++		// On Windows, try to query the process via tasklist
++		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", p))
++		output, err := cmd.Output()
++		if err != nil {
++			return err
++		}
++		if !strings.Contains(string(output), pid) {
++			return fmt.Errorf("process not found")
++		}
++		return nil
++	}
++
++	// Unix-like: use kill -0 to check if process exists
++	return syscall.Kill(p, 0)
++}
++
++// killProcess terminates a process with the given PID (cross-platform)
++func killProcess(pid string) error {
++	p, err := strconv.Atoi(pid)
++	if err != nil {
++		return err
++	}
++
++	if runtime.GOOS == "windows" {
++		// Windows: use taskkill
++		cmd := exec.Command("taskkill", "/F", "/PID", pid)
++		return cmd.Run()
++	}
++
++	// Unix-like: use syscall.Kill with SIGTERM, then SIGKILL if needed
++	if err := syscall.Kill(p, syscall.SIGTERM); err != nil {
++		return err
++	}
++	// Give it a moment to terminate gracefully
++	time.Sleep(500 * time.Millisecond)
++	// Force kill if still running (ignore errors as process may already be gone)
++	syscall.Kill(p, syscall.SIGKILL)
++	return nil
++}
+diff --git a/go.mod b/go.mod
+index dba416d..847e392 100644
+--- a/go.mod
++++ b/go.mod
+@@ -6,19 +6,29 @@ require (
+ 	cloud.google.com/go/auth v0.20.0 // indirect
+ 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
+ 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
++	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+ 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+ 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e // indirect
++	github.com/esiqveland/notify v0.13.3 // indirect
+ 	github.com/felixge/httpsnoop v1.0.4 // indirect
++	github.com/gen2brain/beeep v0.11.2 // indirect
+ 	github.com/go-logr/logr v1.4.3 // indirect
+ 	github.com/go-logr/stdr v1.2.2 // indirect
++	github.com/go-ole/go-ole v1.3.0 // indirect
++	github.com/godbus/dbus/v5 v5.1.0 // indirect
+ 	github.com/google/s2a-go v0.1.9 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+ 	github.com/googleapis/enterprise-certificate-proxy v0.3.15 // indirect
+ 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
++	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
+ 	github.com/manifoldco/promptui v0.9.0 // indirect
++	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
++	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
++	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
+ 	github.com/spf13/cobra v1.10.2 // indirect
+ 	github.com/spf13/pflag v1.0.9 // indirect
++	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
+ 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+ 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect
+ 	go.opentelemetry.io/otel v1.43.0 // indirect
+diff --git a/go.sum b/go.sum
+index 795c2ff..cba3e91 100644
+--- a/go.sum
++++ b/go.sum
+@@ -4,6 +4,8 @@ cloud.google.com/go/auth/oauth2adapt v0.2.8 h1:keo8NaayQZ6wimpNSmW5OPc283g65QNIi
+ cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31RkqZCcwJWNSx2Xvric3RrU88hAYYbjDWYDL+c=
+ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdBtwLoEkH9Zs=
+ cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
++git.sr.ht/~jackmordaunt/go-toast v1.1.2 h1:/yrfI55LRt1M7H1vkaw+NaH1+L1CDxrqDltwm5euVuE=
++git.sr.ht/~jackmordaunt/go-toast v1.1.2/go.mod h1:jA4OqHKTQ4AFBdwrSnwnskUIIS3HYzlJSgdzCKqfavo=
+ github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+ github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+ github.com/chzyer/logex v1.1.10/go.mod h1:+Ywpsq7O8HXn0nuIou7OrIPyXbp3wmkHB+jjWRnGsAI=
+@@ -11,13 +13,23 @@ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e h1:fY5BOSpyZCqRo5O
+ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5PlCu98SY8svDHJxuZscDgtXS6KTTbou5AhLI=
+ github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
+ github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
++github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
++github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
++github.com/esiqveland/notify v0.13.3 h1:QCMw6o1n+6rl+oLUfg8P1IIDSFsDEb2WlXvVvIJbI/o=
++github.com/esiqveland/notify v0.13.3/go.mod h1:hesw/IRYTO0x99u1JPweAl4+5mwXJibQVUcP0Iu5ORE=
+ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
+ github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
++github.com/gen2brain/beeep v0.11.2 h1:+KfiKQBbQCuhfJFPANZuJ+oxsSKAYNe88hIpJuyKWDA=
++github.com/gen2brain/beeep v0.11.2/go.mod h1:jQVvuwnLuwOcdctHn/uyh8horSBNJ8uGb9Cn2W4tvoc=
+ github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
+ github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
+ github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
+ github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=
+ github.com/go-logr/stdr v1.2.2/go.mod h1:mMo/vtBO5dYbehREoey6XUKy/eSumjCCveDpRre4VKE=
++github.com/go-ole/go-ole v1.3.0 h1:Dt6ye7+vXGIKZ7Xtk4s6/xVdGDQynvom7xCFEdWr6uE=
++github.com/go-ole/go-ole v1.3.0/go.mod h1:5LS6F96DhAwUc7C+1HLexzMXY1xGRSryjyPPKW6zv78=
++github.com/godbus/dbus/v5 v5.1.0 h1:4KLkAxT3aOY8Li4FRJe/KvhoNFFxo0m6fNuFUO8QJUk=
++github.com/godbus/dbus/v5 v5.1.0/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
+ github.com/google/s2a-go v0.1.9 h1:LGD7gtMgezd8a/Xak7mEWL0PjoTQFvpRudN895yqKW0=
+ github.com/google/s2a-go v0.1.9/go.mod h1:YA0Ei2ZQL3acow2O62kdp9UlnvMmU7kA6Eutn0dXayM=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+@@ -28,13 +40,30 @@ github.com/googleapis/gax-go/v2 v2.22.0 h1:PjIWBpgGIVKGoCXuiCoP64altEJCj3/Ei+kSU
+ github.com/googleapis/gax-go/v2 v2.22.0/go.mod h1:irWBbALSr0Sk3qlqb9SyJ1h68WjgeFuiOzI4Rqw5+aY=
+ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
+ github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
++github.com/jackmordaunt/icns/v3 v3.0.1 h1:xxot6aNuGrU+lNgxz5I5H0qSeCjNKp8uTXB1j8D4S3o=
++github.com/jackmordaunt/icns/v3 v3.0.1/go.mod h1:5sHL59nqTd2ynTnowxB/MDQFhKNqkK8X687uKNygaSQ=
+ github.com/manifoldco/promptui v0.9.0 h1:3V4HzJk1TtXW1MTZMP7mdlwbBpIinw3HztaIlYthEiA=
+ github.com/manifoldco/promptui v0.9.0/go.mod h1:ka04sppxSGFAtxX0qhlYQjISsg9mR4GWtQEhdbn6Pgg=
++github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 h1:zYyBkD/k9seD2A7fsi6Oo2LfFZAehjjQMERAvZLEDnQ=
++github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646/go.mod h1:jpp1/29i3P1S/RLdc7JQKbRpFeM1dOBd8T9ki5s+AY8=
++github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+ github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
++github.com/sergeymakinen/go-bmp v1.0.0 h1:SdGTzp9WvCV0A1V0mBeaS7kQAwNLdVJbmHlqNWq0R+M=
++github.com/sergeymakinen/go-bmp v1.0.0/go.mod h1:/mxlAQZRLxSvJFNIEGGLBE/m40f3ZnUifpgVDlcUIEY=
++github.com/sergeymakinen/go-ico v1.0.0-beta.0 h1:m5qKH7uPKLdrygMWxbamVn+tl2HfiA3K6MFJw4GfZvQ=
++github.com/sergeymakinen/go-ico v1.0.0-beta.0/go.mod h1:wQ47mTczswBO5F0NoDt7O0IXgnV4Xy3ojrroMQzyhUk=
+ github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
+ github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=
+ github.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=
+ github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
++github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
++github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
++github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
++github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
++github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
++github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
++github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af h1:6yITBqGTE2lEeTPG04SN9W+iWHCRyHqlVYILiSXziwk=
++github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af/go.mod h1:4F09kP5F+am0jAwlQLddpoMDM+iewkxxt6nxUQ5nq5o=
+ go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
+ go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 h1:OyrsyzuttWTSur2qN/Lm0m2a8yqyIjUVBZcxFPuXq2o=
+@@ -54,6 +83,7 @@ golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=
+ golang.org/x/oauth2 v0.36.0/go.mod h1:YDBUJMTkDnJS+A4BP4eZBjCqtokkg1hODuPjwiGPO7Q=
+ golang.org/x/sys v0.0.0-20181122145206-62eef0e2fa9b h1:MQE+LT/ABUuuvEZ+YQAMSXindAdUh7slEmAkup74op4=
+ golang.org/x/sys v0.0.0-20181122145206-62eef0e2fa9b/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.1.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.43.0 h1:Rlag2XtaFTxp19wS8MXlJwTvoh8ArU6ezoyFsMyCTNI=
+ golang.org/x/sys v0.43.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+ golang.org/x/text v0.36.0 h1:JfKh3XmcRPqZPKevfXVpI1wXPTqbkE5f7JA92a55Yxg=
+@@ -67,3 +97,5 @@ google.golang.org/grpc v1.80.0/go.mod h1:ho/dLnxwi3EDJA4Zghp7k2Ec1+c2jqup0bFkw07
+ google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
+ google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+diff --git a/utils/notify.go b/utils/notify.go
+index b8e0077..27f6a2b 100644
+--- a/utils/notify.go
++++ b/utils/notify.go
+@@ -6,9 +6,12 @@ import (
+ 	"os/exec"
+ 	"path/filepath"
+ 	"regexp"
++	"runtime"
+ 	"strconv"
+ 	"strings"
+ 	"time"
++
++	"github.com/gen2brain/beeep"
+ )
  
-+var version = "dev"
+ // sanitizeForFilename replaces any character that is unsafe for filenames.
+@@ -54,38 +57,75 @@ func SendNotificationLogic(name string, Time string) {
+ 	if ShouldSendNotification(name) {
+ 		fmt.Printf("Sending notification for: %s\n", name)
+ 
+-		title := fmt.Sprintf("Alert for %s", name)
+-		message := fmt.Sprintf("Critical update: %s anime releasing soon in %s", name, Time)
++		title := fmt.Sprintf("🎌 ani-rem: %s", name)
++		message := fmt.Sprintf("Episode releasing soon in %s", Time)
 +
-+var versionCmd = &cobra.Command{
-+	Use:   "version",
-+	Short: "Print version information",
-+	Run: func(cmd *cobra.Command, args []string) {
-+		fmt.Printf("ani-rem version %s\n", version)
-+	},
++		// Use beeep for cross-platform notifications
++		err := beeep.Notify(title, message, "")
++		if err != nil {
++			fmt.Printf("Error sending notification for %s: %v\n", name, err)
++
++			// Fallback to platform-specific commands if beeep fails
++			fallbackNotification(title, message)
++		}
++
++		MarkAsSent(name)
++	} else {
++		fmt.Printf("Skipping: Notification for %s was sent recently.\n", name)
++	}
 +}
-+
- func init() {
-+	rootCmd.AddCommand(versionCmd)
- 	startCmd.Flags().BoolVar(&autoSync, "auto-sync", false, "Automatically sync anime schedule to Google Calendar once per day")
- 	rootCmd.AddCommand(startCmd)
- 	rootCmd.AddCommand(stopCmd)
-diff --git a/models/models.go b/models/models.go
-index b5d1600..be41117 100644
---- a/models/models.go
-+++ b/models/models.go
-@@ -20,3 +20,24 @@ type AnimeData struct {
- type JikanResponse struct {
- 	Data []AnimeData `json:"data"`
+ 
++// fallbackNotification provides platform-specific notification fallback
++func fallbackNotification(title, message string) {
++	switch runtime.GOOS {
++	case "darwin":
++		// macOS: use osascript
++		cmd := exec.Command("osascript", "-e",
++			fmt.Sprintf(`display notification "%s" with title "%s"`, message, title))
++		cmd.Run()
++	case "windows":
++		// Windows: use PowerShell toast notification (Windows 10+)
++		psScript := fmt.Sprintf(`
++			[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
++			[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
++			$template = @"
++			<toast>
++				<visual>
++					<binding template="ToastText02">
++						<text id="1">%s</text>
++						<text id="2">%s</text>
++					</binding>
++				</visual>
++			</toast>
++"@
++			$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
++			$xml.LoadXml($template)
++			$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
++			[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("ani-rem").Show($toast)
++		`, title, message)
++		cmd := exec.Command("powershell", "-Command", psScript)
++		cmd.Run()
++	case "linux":
++		// Linux fallback: try notify-send with common display settings
+ 		cmd := exec.Command("notify-send",
+ 			"-u", "critical",
+ 			"-t", "0",
+ 			title,
+ 			message,
+ 		)
+-
+ 		display := os.Getenv("DISPLAY")
+ 		if display == "" {
+ 			display = ":0"
+ 		}
+-
+ 		uid := os.Getuid()
+ 		dbus := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+ 		if dbus == "" {
+ 			dbus = "unix:path=/run/user/" + strconv.Itoa(uid) + "/bus"
+ 		}
+-
+ 		cmd.Env = append(os.Environ(),
+ 			"DISPLAY="+display,
+ 			"DBUS_SESSION_BUS_ADDRESS="+dbus,
+ 		)
+-
+-		if err := cmd.Run(); err != nil {
+-			fmt.Printf("Error sending notification for %s: %v\n", name, err)
+-		}
+-
+-		MarkAsSent(name)
+-	} else {
+-		fmt.Printf("Skipping: Notification for %s was sent recently.\n", name)
++		cmd.Run()
+ 	}
  }
-+
-+// SeasonalResponse represents the Jikan seasonal anime API response
-+type SeasonalResponse struct {
-+	Data       []AnimeData `json:"data"`
-+	Pagination struct {
-+		LastVisiblePage int  `json:"last_visible_page"`
-+		HasNextPage     bool `json:"has_next_page"`
-+		CurrentPage     int  `json:"current_page"`
-+		Items           struct {
-+			Count   int `json:"count"`
-+			Total   int `json:"total"`
-+			PerPage int `json:"per_page"`
-+		} `json:"items"`
-+	} `json:"pagination"`
-+}
-+
-+// SeasonListItem wraps AnimeData with selection state for interactive menus
-+type SeasonListItem struct {
-+	AnimeData
-+	Selected bool
-+}
-diff --git a/utils/CheckAiringAnime.go b/utils/CheckAiringAnime.go
-deleted file mode 100644
-index 5e05c3d..0000000
---- a/utils/CheckAiringAnime.go
-+++ /dev/null
-@@ -1,61 +0,0 @@
--package utils
--
--import (
--	"ani-rem/models"
--	"encoding/json"
--	"fmt"
--	"os"
--	"strings"
--	"time"
--)
--
--func CheckAiringAnime() {
--	filePath := GetStoragePath()
--	fileData, err := os.ReadFile(filePath)
--	if err != nil {
--		// No list yet is not an error
--		return
--	}
--
--	var animes []models.AnimeData
--	if err := json.Unmarshal(fileData, &animes); err != nil {
--		fmt.Printf("Error parsing anime list: %v\n", err)
--		return
--	}
--
--	// Load config to get the notification threshold (in hours)
--	cfg, err := LoadConfig()
--	if err != nil {
--		fmt.Printf("Could not load config, using default threshold (24h): %v\n", err)
--		cfg = defaultConfig()
--	}
--	thresholdDuration := time.Duration(cfg.NotificationThresholdHours) * time.Hour
--
--	for _, anime := range animes {
--		if anime.Status != "Currently Airing" {
--			continue
--		}
--
--		remaining := GetTimeUntilAiring(anime.Status, anime.Broadcast.Time, anime.Broadcast.Day)
--		fmt.Println(remaining)
--
--		// Strip the prefix and remove spaces
--		rawDuration := strings.TrimPrefix(remaining, "Next episode in ")
--		cleanDuration := strings.ReplaceAll(rawDuration, " ", "")
--
--		d, err := time.ParseDuration(cleanDuration)
--		if err != nil {
--			fmt.Printf("Error parsing duration for %s: %v\n", anime.Title, err)
--			continue
--		}
--
--		if d < thresholdDuration {
--			fmt.Printf("Status: Episode drops in less than %d hours!\n", cfg.NotificationThresholdHours)
--			SendNotification(anime.Title, cleanDuration)
--		}
--
--		exactTime := time.Now().Add(d)
--		fmt.Printf("Duration: %v\n", d)
--		fmt.Printf("Exact Release Time: %s\n", exactTime.Format("2006-01-02 15:04:05"))
--	}
--}
+diff --git a/working_changes.diff b/working_changes.diff
+index bf61e27..82b02b5 100644
+--- a/working_changes.diff
++++ b/working_changes.diff
+@@ -1,238 +0,0 @@
+-diff --git a/README.md b/README.md
+-index 5b6dd77..a5b13e2 100644
+---- a/README.md
+-+++ b/README.md
+-@@ -2,7 +2,7 @@
+- 
+- # 🎌 ani-rem
+- 
+--**A lightweight anime airing reminder for Linux (cli) — built in Go. (dashboard version coming soon)**
+-+**A lightweight anime airing reminder for Linux (cli) — built in Go.**
+- 
+- [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+- [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
+-@@ -33,6 +33,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
+- ## Features
+- 
+- - 🔍 **Interactive Search & Add** — Search anime by name via the Jikan API with a Promptui-driven interactive menu. Optionally view the synopsis before adding.
+-+- 📅 **Seasonal Anime Browser** — Browse and bulk-add anime from the current or any specific season (winter, spring, summer, fall). Multi-select interface with filtering options.
+- - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
+- - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
+- - 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
+-@@ -171,7 +172,7 @@ ani-rem --help
+- ani-rem
+- ```
+- 
+--Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
+-+Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
+- 
+- ---
+- 
+-@@ -191,6 +192,47 @@ Opens an interactive search powered by the Jikan API. After selecting a result y
+- 
+- ---
+- 
+-+### `seasonal` — Browse seasonal anime
+-+
+-+```bash
+-+ani-rem seasonal                    # Browse current season
+-+ani-rem seasonal --year 2024 --season spring
+-+ani-rem seasonal --filter           # Show only currently airing
+-+ani-rem seasonal --page 2           # Navigate pages
+-+```
+-+
+-+Browse anime from any season with an interactive multi-select interface:
+-+
+-+- Navigate with arrow keys, press **Enter** to select/deselect anime
+-+- View synopsis and details for each show
+-+- Bulk add selected anime to your watchlist
+-+- Filter to show only currently airing shows
+-+
+-+**Interactive controls:**
+-+- `☑/☐` — Toggle selection
+-+- `✅ Add Selected to Watchlist` — Confirm and add all selected
+-+- `🔄 Select All / Deselect All` — Toggle all items at once
+-+
+-+---
+-+
+-+### `seasonal bulk` — Quick bulk-add seasonal anime
+-+
+-+```bash
+-+ani-rem seasonal bulk                    # Interactive multi-select
+-+ani-rem seasonal bulk --all              # Add all currently airing
+-+ani-rem seasonal bulk --min-score 7.5    # Filter by minimum score
+-+ani-rem seasonal bulk --yes              # Skip confirmation prompt
+-+```
+-+
+-+A streamlined interface for quickly adding multiple current-season shows:
+-+
+-+- `--all` / `-a` — Automatically select all currently airing anime
+-+- `--min-score` / `-m` — Filter by minimum MAL score (0-10)
+-+- `--yes` / `-y` — Skip the confirmation prompt
+-+- `--filter` / `-f` — Only show currently airing anime
+-+
+-+---
+-+
+- ### `list` — View and manage your watchlist
+- 
+- ```bash
+-@@ -464,9 +506,12 @@ ani-rem/
+- │   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
+- │   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
+- │   ├── clear.go               # `calendar clear` subcommand — bulk delete events
+--│   └── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
+-+│   ├── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
+-+│   ├── seasonal.go            # `seasonal` subcommand — browse and add seasonal anime
+-+│   └── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
+- ├── utils/
+--│   ├── search_anime.go        # Jikan API client
+-+│   ├── search_anime.go        # Jikan API client for search
+-+│   ├── seasonal_anime.go      # Jikan seasonal API client & bulk add logic
+- │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
+- │   ├── config.go              # Configuration file handling (load/save defaults)
+- │   ├── time.go                # JST broadcast string → local countdown
+-@@ -474,7 +519,7 @@ ani-rem/
+- │   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
+- │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
+- └── models/
+--    └── models.go              # AnimeData, Broadcast, JikanResponse structs
+-+    └── models.go              # AnimeData, Broadcast, JikanResponse, SeasonalResponse, SeasonListItem structs
+- ```
+- 
+- **Dependencies:**
+-diff --git a/cmd/root.go b/cmd/root.go
+-index 329e289..5e8268b 100644
+---- a/cmd/root.go
+-+++ b/cmd/root.go
+-@@ -123,6 +123,7 @@ var rootCmd = &cobra.Command{
+- 				Label: "Main Menu",
+- 				Items: []string{
+- 					"Search & Add Anime",
+-+					"📺 Browse Seasonal Anime",
+- 					"View My Watchlist",
+- 					"Start Background Worker",
+- 					"Stop Background Worker",
+-@@ -141,6 +142,8 @@ var rootCmd = &cobra.Command{
+- 			switch result {
+- 			case "Search & Add Anime":
+- 				createCmd.Run(createCmd, args)
+-+			case "📺 Browse Seasonal Anime": // ← NEW
+-+				seasonalCmd.Run(seasonalCmd, args)
+- 			case "View My Watchlist":
+- 				listCmd.Run(listCmd, args)
+- 			case "Start Background Worker":
+-@@ -158,7 +161,18 @@ var rootCmd = &cobra.Command{
+- 	},
+- }
+- 
+-+var version = "dev"
+-+
+-+var versionCmd = &cobra.Command{
+-+	Use:   "version",
+-+	Short: "Print version information",
+-+	Run: func(cmd *cobra.Command, args []string) {
+-+		fmt.Printf("ani-rem version %s\n", version)
+-+	},
+-+}
+-+
+- func init() {
+-+	rootCmd.AddCommand(versionCmd)
+- 	startCmd.Flags().BoolVar(&autoSync, "auto-sync", false, "Automatically sync anime schedule to Google Calendar once per day")
+- 	rootCmd.AddCommand(startCmd)
+- 	rootCmd.AddCommand(stopCmd)
+-diff --git a/models/models.go b/models/models.go
+-index b5d1600..be41117 100644
+---- a/models/models.go
+-+++ b/models/models.go
+-@@ -20,3 +20,24 @@ type AnimeData struct {
+- type JikanResponse struct {
+- 	Data []AnimeData `json:"data"`
+- }
+-+
+-+// SeasonalResponse represents the Jikan seasonal anime API response
+-+type SeasonalResponse struct {
+-+	Data       []AnimeData `json:"data"`
+-+	Pagination struct {
+-+		LastVisiblePage int  `json:"last_visible_page"`
+-+		HasNextPage     bool `json:"has_next_page"`
+-+		CurrentPage     int  `json:"current_page"`
+-+		Items           struct {
+-+			Count   int `json:"count"`
+-+			Total   int `json:"total"`
+-+			PerPage int `json:"per_page"`
+-+		} `json:"items"`
+-+	} `json:"pagination"`
+-+}
+-+
+-+// SeasonListItem wraps AnimeData with selection state for interactive menus
+-+type SeasonListItem struct {
+-+	AnimeData
+-+	Selected bool
+-+}
+-diff --git a/utils/CheckAiringAnime.go b/utils/CheckAiringAnime.go
+-deleted file mode 100644
+-index 5e05c3d..0000000
+---- a/utils/CheckAiringAnime.go
+-+++ /dev/null
+-@@ -1,61 +0,0 @@
+--package utils
+--
+--import (
+--	"ani-rem/models"
+--	"encoding/json"
+--	"fmt"
+--	"os"
+--	"strings"
+--	"time"
+--)
+--
+--func CheckAiringAnime() {
+--	filePath := GetStoragePath()
+--	fileData, err := os.ReadFile(filePath)
+--	if err != nil {
+--		// No list yet is not an error
+--		return
+--	}
+--
+--	var animes []models.AnimeData
+--	if err := json.Unmarshal(fileData, &animes); err != nil {
+--		fmt.Printf("Error parsing anime list: %v\n", err)
+--		return
+--	}
+--
+--	// Load config to get the notification threshold (in hours)
+--	cfg, err := LoadConfig()
+--	if err != nil {
+--		fmt.Printf("Could not load config, using default threshold (24h): %v\n", err)
+--		cfg = defaultConfig()
+--	}
+--	thresholdDuration := time.Duration(cfg.NotificationThresholdHours) * time.Hour
+--
+--	for _, anime := range animes {
+--		if anime.Status != "Currently Airing" {
+--			continue
+--		}
+--
+--		remaining := GetTimeUntilAiring(anime.Status, anime.Broadcast.Time, anime.Broadcast.Day)
+--		fmt.Println(remaining)
+--
+--		// Strip the prefix and remove spaces
+--		rawDuration := strings.TrimPrefix(remaining, "Next episode in ")
+--		cleanDuration := strings.ReplaceAll(rawDuration, " ", "")
+--
+--		d, err := time.ParseDuration(cleanDuration)
+--		if err != nil {
+--			fmt.Printf("Error parsing duration for %s: %v\n", anime.Title, err)
+--			continue
+--		}
+--
+--		if d < thresholdDuration {
+--			fmt.Printf("Status: Episode drops in less than %d hours!\n", cfg.NotificationThresholdHours)
+--			SendNotification(anime.Title, cleanDuration)
+--		}
+--
+--		exactTime := time.Now().Add(d)
+--		fmt.Printf("Duration: %v\n", d)
+--		fmt.Printf("Exact Release Time: %s\n", exactTime.Format("2006-01-02 15:04:05"))
+--	}
+--}
