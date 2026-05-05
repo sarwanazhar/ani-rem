@@ -107,6 +107,7 @@ var stopCmd = &cobra.Command{
 		pid := string(pidData)
 		fmt.Printf("Stopping worker (PID %s)...\n", pid)
 
+		// This function is defined in process_unix.go or process_windows.go
 		if err := killProcess(pid); err == nil {
 			os.Remove(pidFile)
 			fmt.Println("🛑 Worker stopped.")
