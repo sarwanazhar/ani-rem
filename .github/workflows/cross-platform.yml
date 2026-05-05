@@ -17,14 +17,25 @@ jobs:
           cache: true
           
       - name: Build & Verify
+        shell: bash  # Use bash for cross-platform compatibility
         run: |
           go mod tidy
           go build -o ani-rem
-          ./ani-rem version
+          
+      - name: Test Binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ./ani-rem.exe version
+          else
+            ./ani-rem version
+          fi
+        env:
+          RUNNER_OS: ${{ runner.os }}
           
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ani-rem-${{ matrix.os }}
-          path: ani-rem
+          path: ${{ matrix.os == 'windows-latest' && 'ani-rem.exe' || 'ani-rem' }}
           if-no-files-found: error
