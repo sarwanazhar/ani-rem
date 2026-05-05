@@ -1,0 +1,238 @@
+diff --git a/README.md b/README.md
+index 5b6dd77..a5b13e2 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ # 🎌 ani-rem
+ 
+-**A lightweight anime airing reminder for Linux (cli) — built in Go. (dashboard version coming soon)**
++**A lightweight anime airing reminder for Linux (cli) — built in Go.**
+ 
+ [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+ [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
+@@ -33,6 +33,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
+ ## Features
+ 
+ - 🔍 **Interactive Search & Add** — Search anime by name via the Jikan API with a Promptui-driven interactive menu. Optionally view the synopsis before adding.
++- 📅 **Seasonal Anime Browser** — Browse and bulk-add anime from the current or any specific season (winter, spring, summer, fall). Multi-select interface with filtering options.
+ - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
+ - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
+ - 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
+@@ -171,7 +172,7 @@ ani-rem --help
+ ani-rem
+ ```
+ 
+-Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
++Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
+ 
+ ---
+ 
+@@ -191,6 +192,47 @@ Opens an interactive search powered by the Jikan API. After selecting a result y
+ 
+ ---
+ 
++### `seasonal` — Browse seasonal anime
++
++```bash
++ani-rem seasonal                    # Browse current season
++ani-rem seasonal --year 2024 --season spring
++ani-rem seasonal --filter           # Show only currently airing
++ani-rem seasonal --page 2           # Navigate pages
++```
++
++Browse anime from any season with an interactive multi-select interface:
++
++- Navigate with arrow keys, press **Enter** to select/deselect anime
++- View synopsis and details for each show
++- Bulk add selected anime to your watchlist
++- Filter to show only currently airing shows
++
++**Interactive controls:**
++- `☑/☐` — Toggle selection
++- `✅ Add Selected to Watchlist` — Confirm and add all selected
++- `🔄 Select All / Deselect All` — Toggle all items at once
++
++---
++
++### `seasonal bulk` — Quick bulk-add seasonal anime
++
++```bash
++ani-rem seasonal bulk                    # Interactive multi-select
++ani-rem seasonal bulk --all              # Add all currently airing
++ani-rem seasonal bulk --min-score 7.5    # Filter by minimum score
++ani-rem seasonal bulk --yes              # Skip confirmation prompt
++```
++
++A streamlined interface for quickly adding multiple current-season shows:
++
++- `--all` / `-a` — Automatically select all currently airing anime
++- `--min-score` / `-m` — Filter by minimum MAL score (0-10)
++- `--yes` / `-y` — Skip the confirmation prompt
++- `--filter` / `-f` — Only show currently airing anime
++
++---
++
+ ### `list` — View and manage your watchlist
+ 
+ ```bash
+@@ -464,9 +506,12 @@ ani-rem/
+ │   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
+ │   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
+ │   ├── clear.go               # `calendar clear` subcommand — bulk delete events
+-│   └── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
++│   ├── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
++│   ├── seasonal.go            # `seasonal` subcommand — browse and add seasonal anime
++│   └── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
+ ├── utils/
+-│   ├── search_anime.go        # Jikan API client
++│   ├── search_anime.go        # Jikan API client for search
++│   ├── seasonal_anime.go      # Jikan seasonal API client & bulk add logic
+ │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
+ │   ├── config.go              # Configuration file handling (load/save defaults)
+ │   ├── time.go                # JST broadcast string → local countdown
+@@ -474,7 +519,7 @@ ani-rem/
+ │   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
+ │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
+ └── models/
+-    └── models.go              # AnimeData, Broadcast, JikanResponse structs
++    └── models.go              # AnimeData, Broadcast, JikanResponse, SeasonalResponse, SeasonListItem structs
+ ```
+ 
+ **Dependencies:**
+diff --git a/cmd/root.go b/cmd/root.go
+index 329e289..5e8268b 100644
+--- a/cmd/root.go
++++ b/cmd/root.go
+@@ -123,6 +123,7 @@ var rootCmd = &cobra.Command{
+ 				Label: "Main Menu",
+ 				Items: []string{
+ 					"Search & Add Anime",
++					"📺 Browse Seasonal Anime",
+ 					"View My Watchlist",
+ 					"Start Background Worker",
+ 					"Stop Background Worker",
+@@ -141,6 +142,8 @@ var rootCmd = &cobra.Command{
+ 			switch result {
+ 			case "Search & Add Anime":
+ 				createCmd.Run(createCmd, args)
++			case "📺 Browse Seasonal Anime": // ← NEW
++				seasonalCmd.Run(seasonalCmd, args)
+ 			case "View My Watchlist":
+ 				listCmd.Run(listCmd, args)
+ 			case "Start Background Worker":
+@@ -158,7 +161,18 @@ var rootCmd = &cobra.Command{
+ 	},
+ }
+ 
++var version = "dev"
++
++var versionCmd = &cobra.Command{
++	Use:   "version",
++	Short: "Print version information",
++	Run: func(cmd *cobra.Command, args []string) {
++		fmt.Printf("ani-rem version %s\n", version)
++	},
++}
++
+ func init() {
++	rootCmd.AddCommand(versionCmd)
+ 	startCmd.Flags().BoolVar(&autoSync, "auto-sync", false, "Automatically sync anime schedule to Google Calendar once per day")
+ 	rootCmd.AddCommand(startCmd)
+ 	rootCmd.AddCommand(stopCmd)
+diff --git a/models/models.go b/models/models.go
+index b5d1600..be41117 100644
+--- a/models/models.go
++++ b/models/models.go
+@@ -20,3 +20,24 @@ type AnimeData struct {
+ type JikanResponse struct {
+ 	Data []AnimeData `json:"data"`
+ }
++
++// SeasonalResponse represents the Jikan seasonal anime API response
++type SeasonalResponse struct {
++	Data       []AnimeData `json:"data"`
++	Pagination struct {
++		LastVisiblePage int  `json:"last_visible_page"`
++		HasNextPage     bool `json:"has_next_page"`
++		CurrentPage     int  `json:"current_page"`
++		Items           struct {
++			Count   int `json:"count"`
++			Total   int `json:"total"`
++			PerPage int `json:"per_page"`
++		} `json:"items"`
++	} `json:"pagination"`
++}
++
++// SeasonListItem wraps AnimeData with selection state for interactive menus
++type SeasonListItem struct {
++	AnimeData
++	Selected bool
++}
+diff --git a/utils/CheckAiringAnime.go b/utils/CheckAiringAnime.go
+deleted file mode 100644
+index 5e05c3d..0000000
+--- a/utils/CheckAiringAnime.go
++++ /dev/null
+@@ -1,61 +0,0 @@
+-package utils
+-
+-import (
+-	"ani-rem/models"
+-	"encoding/json"
+-	"fmt"
+-	"os"
+-	"strings"
+-	"time"
+-)
+-
+-func CheckAiringAnime() {
+-	filePath := GetStoragePath()
+-	fileData, err := os.ReadFile(filePath)
+-	if err != nil {
+-		// No list yet is not an error
+-		return
+-	}
+-
+-	var animes []models.AnimeData
+-	if err := json.Unmarshal(fileData, &animes); err != nil {
+-		fmt.Printf("Error parsing anime list: %v\n", err)
+-		return
+-	}
+-
+-	// Load config to get the notification threshold (in hours)
+-	cfg, err := LoadConfig()
+-	if err != nil {
+-		fmt.Printf("Could not load config, using default threshold (24h): %v\n", err)
+-		cfg = defaultConfig()
+-	}
+-	thresholdDuration := time.Duration(cfg.NotificationThresholdHours) * time.Hour
+-
+-	for _, anime := range animes {
+-		if anime.Status != "Currently Airing" {
+-			continue
+-		}
+-
+-		remaining := GetTimeUntilAiring(anime.Status, anime.Broadcast.Time, anime.Broadcast.Day)
+-		fmt.Println(remaining)
+-
+-		// Strip the prefix and remove spaces
+-		rawDuration := strings.TrimPrefix(remaining, "Next episode in ")
+-		cleanDuration := strings.ReplaceAll(rawDuration, " ", "")
+-
+-		d, err := time.ParseDuration(cleanDuration)
+-		if err != nil {
+-			fmt.Printf("Error parsing duration for %s: %v\n", anime.Title, err)
+-			continue
+-		}
+-
+-		if d < thresholdDuration {
+-			fmt.Printf("Status: Episode drops in less than %d hours!\n", cfg.NotificationThresholdHours)
+-			SendNotification(anime.Title, cleanDuration)
+-		}
+-
+-		exactTime := time.Now().Add(d)
+-		fmt.Printf("Duration: %v\n", d)
+-		fmt.Printf("Exact Release Time: %s\n", exactTime.Format("2006-01-02 15:04:05"))
+-	}
+-}

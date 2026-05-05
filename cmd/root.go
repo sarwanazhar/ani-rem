@@ -123,6 +123,7 @@ var rootCmd = &cobra.Command{
 				Label: "Main Menu",
 				Items: []string{
 					"Search & Add Anime",
+					"📺 Browse Seasonal Anime",
 					"View My Watchlist",
 					"Start Background Worker",
 					"Stop Background Worker",
@@ -141,6 +142,8 @@ var rootCmd = &cobra.Command{
 			switch result {
 			case "Search & Add Anime":
 				createCmd.Run(createCmd, args)
+			case "📺 Browse Seasonal Anime": // ← NEW
+				seasonalCmd.Run(seasonalCmd, args)
 			case "View My Watchlist":
 				listCmd.Run(listCmd, args)
 			case "Start Background Worker":
@@ -158,7 +161,18 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var version = "dev"
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("ani-rem version %s\n", version)
+	},
+}
+
 func init() {
+	rootCmd.AddCommand(versionCmd)
 	startCmd.Flags().BoolVar(&autoSync, "auto-sync", false, "Automatically sync anime schedule to Google Calendar once per day")
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)

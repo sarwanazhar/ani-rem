@@ -20,3 +20,24 @@ type AnimeData struct {
 type JikanResponse struct {
 	Data []AnimeData `json:"data"`
 }
+
+// SeasonalResponse represents the Jikan seasonal anime API response
+type SeasonalResponse struct {
+	Data       []AnimeData `json:"data"`
+	Pagination struct {
+		LastVisiblePage int  `json:"last_visible_page"`
+		HasNextPage     bool `json:"has_next_page"`
+		CurrentPage     int  `json:"current_page"`
+		Items           struct {
+			Count   int `json:"count"`
+			Total   int `json:"total"`
+			PerPage int `json:"per_page"`
+		} `json:"items"`
+	} `json:"pagination"`
+}
+
+// SeasonListItem wraps AnimeData with selection state for interactive menus
+type SeasonListItem struct {
+	AnimeData
+	Selected bool
+}

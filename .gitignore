@@ -1,0 +1,26 @@
+# Go
+/bin/
+*.exe
+*.test
+coverage.out
+
+# Config & credentials (NEVER commit these)
+~/.config/ani-rem/google_credentials.json
+~/.config/ani-rem/google_token.json
+
+# Temp files
+/tmp/ani-rem*
+/tmp/notify_*.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# gitingest
+digest.txt

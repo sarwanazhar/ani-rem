@@ -2,7 +2,7 @@
 
 # 🎌 ani-rem
 
-**A lightweight anime airing reminder for Linux (cli) — built in Go. (dashboard version coming soon)**
+**A lightweight anime airing reminder for Linux (cli) — built in Go.**
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://www.linux.org/)
@@ -33,6 +33,7 @@ Never miss an episode again. `ani-rem` runs silently in the background, fires pe
 ## Features
 
 - 🔍 **Interactive Search & Add** — Search anime by name via the Jikan API with a Promptui-driven interactive menu. Optionally view the synopsis before adding.
+- 📅 **Seasonal Anime Browser** — Browse and bulk-add anime from the current or any specific season (winter, spring, summer, fall). Multi-select interface with filtering options.
 - 📋 **Watchlist Management** — List all saved anime, view details, delete individual entries, or wipe the entire list.
 - ⏱️ **Countdown Timers** — Displays time-until-next-episode countdowns, but only for shows with status `"Currently Airing"`. Finished or upcoming shows show their status instead.
 - 🔔 **Background Notifications** — A persistent daemon checks your watchlist every 5 minutes and sends a `critical`-priority desktop notification for any episode airing within the configured threshold (default: 24 hours).
@@ -171,7 +172,7 @@ ani-rem --help
 ani-rem
 ```
 
-Launches the Promptui main menu with all options: Search & Add Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
+Launches the Promptui main menu with all options: Search & Add Anime, Browse Seasonal Anime, View My Watchlist, Start Background Worker, Stop Background Worker, Google Calendar, Settings, Exit.
 
 ---
 
@@ -188,6 +189,47 @@ Opens an interactive search powered by the Jikan API. After selecting a result y
 - **Confirm & Add to List** — saves it to `~/.config/ani-rem/list.json`
 - **Show Details** — prints the status, score, and synopsis, then asks if you want to add it
 - **Do Nothing** — cancels without saving
+
+---
+
+### `seasonal` — Browse seasonal anime
+
+```bash
+ani-rem seasonal                    # Browse current season
+ani-rem seasonal --year 2024 --season spring
+ani-rem seasonal --filter           # Show only currently airing
+ani-rem seasonal --page 2           # Navigate pages
+```
+
+Browse anime from any season with an interactive multi-select interface:
+
+- Navigate with arrow keys, press **Enter** to select/deselect anime
+- View synopsis and details for each show
+- Bulk add selected anime to your watchlist
+- Filter to show only currently airing shows
+
+**Interactive controls:**
+- `☑/☐` — Toggle selection
+- `✅ Add Selected to Watchlist` — Confirm and add all selected
+- `🔄 Select All / Deselect All` — Toggle all items at once
+
+---
+
+### `seasonal bulk` — Quick bulk-add seasonal anime
+
+```bash
+ani-rem seasonal bulk                    # Interactive multi-select
+ani-rem seasonal bulk --all              # Add all currently airing
+ani-rem seasonal bulk --min-score 7.5    # Filter by minimum score
+ani-rem seasonal bulk --yes              # Skip confirmation prompt
+```
+
+A streamlined interface for quickly adding multiple current-season shows:
+
+- `--all` / `-a` — Automatically select all currently airing anime
+- `--min-score` / `-m` — Filter by minimum MAL score (0-10)
+- `--yes` / `-y` — Skip the confirmation prompt
+- `--filter` / `-f` — Only show currently airing anime
 
 ---
 
@@ -464,9 +506,12 @@ ani-rem/
 │   ├── setup.go               # `setup-calendar` subcommand — guided OAuth instructions
 │   ├── sync.go                # `sync` subcommand — sync airing anime to Google Calendar
 │   ├── clear.go               # `calendar clear` subcommand — bulk delete events
-│   └── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
+│   ├── calendar_remove.go     # `calendar remove` subcommand — delete specific anime events
+│   ├── seasonal.go            # `seasonal` subcommand — browse and add seasonal anime
+│   └── seasonal_bulk.go       # `seasonal bulk` subcommand — quick bulk-add current season
 ├── utils/
-│   ├── search_anime.go        # Jikan API client
+│   ├── search_anime.go        # Jikan API client for search
+│   ├── seasonal_anime.go      # Jikan seasonal API client & bulk add logic
 │   ├── storage.go             # JSON read/write for ~/.config/ani-rem/list.json
 │   ├── config.go              # Configuration file handling (load/save defaults)
 │   ├── time.go                # JST broadcast string → local countdown
@@ -474,7 +519,7 @@ ani-rem/
 │   ├── CheckAiringAnime.go    # Core check loop — parses countdowns, triggers notifications
 │   └── google_calendar.go     # Google Calendar API client, OAuth flow, event CRUD
 └── models/
-    └── models.go              # AnimeData, Broadcast, JikanResponse structs
+    └── models.go              # AnimeData, Broadcast, JikanResponse, SeasonalResponse, SeasonListItem structs
 ```
 
 **Dependencies:**
