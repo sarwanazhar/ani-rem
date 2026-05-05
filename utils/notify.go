@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +64,7 @@ func SendNotificationLogic(name string, Time string) {
 		message := fmt.Sprintf("Episode releasing soon in %s", Time)
 
 		// Use beeep for cross-platform notifications
-		err := beeep.Notify(title, message, "")
+		err := beeep.Alert(title, message, "")
 		if err != nil {
 			fmt.Printf("Error sending notification for %s: %v\n", name, err)
 
@@ -128,4 +131,84 @@ func fallbackNotification(title, message string) {
 		)
 		cmd.Run()
 	}
+}
+
+func getEmbedColor(score float64) int {
+	if score >= 8.0 {
+		return 5763719 // Green
+	} else if score >= 6.0 {
+		return 15158332 // Yellow
+	}
+	return 15105570 // Red
+}
+
+// SendDiscordNotification sends an enhanced embed notification to Discord
+func SendDiscordNotification(webhookURL, animeTitle, countdown string, score float64, malID int) error {
+	// Build MAL link
+	malLink := fmt.Sprintf("https://myanimelist.net/anime/%d", malID)
+
+	// Build description with enhanced info
+	description := fmt.Sprintf(
+		"🎬 **%s**"+
+			"⏰ Episode releasing in **%s**"+
+			"⭐ Score: **%.1f/10**"+
+			"🔗 [View on MyAnimeList](%s)",
+		animeTitle, countdown, score, malLink,
+	)
+
+	payload := map[string]interface{}{
+		"embeds": []map[string]interface{}{
+			{
+				"title":       "🎌 New Episode Alert! @everyone",
+				"description": description,
+				"color":       getEmbedColor(score),
+				"footer": map[string]interface{}{
+					"text": "Powered by ani-rem",
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Discord payload: %w", err)
+	}
+
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send Discord webhook: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Discord returns 204 No Content on success
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Discord returned status: %d %s", resp.StatusCode, resp.Status)
+	}
+
+	return nil
+}
+
+// SendDiscordNotificationIfEnabled wraps the send logic with config check and deduplication
+func SendDiscordNotificationIfEnabled(animeTitle, countdown string, score float64, malID int) {
+	cfg, err := LoadConfig()
+	if err != nil || !cfg.DiscordEnabled || cfg.DiscordWebhookURL == "" {
+		return
+	}
+
+	// Use same deduplication lock as desktop notifications
+	if ShouldSendNotification(animeTitle) {
+		fmt.Printf("🔕 Skipping Discord notification for %s (sent recently)", animeTitle)
+		return
+	}
+
+	fmt.Printf("📡 Sending Discord notification for: %s", animeTitle)
+	err = SendDiscordNotification(cfg.DiscordWebhookURL, animeTitle, countdown, score, malID)
+	if err != nil {
+		fmt.Printf("❌ Discord notification failed for %s: %v", animeTitle, err)
+		return
+	}
+
+	// Mark as sent to enforce 1-hour cooldown
+	MarkAsSent(animeTitle)
+	fmt.Printf("✅ Discord notification sent for %s", animeTitle)
 }

@@ -19,14 +19,14 @@ func CheckAiringAnime() {
 
 	var animes []models.AnimeData
 	if err := json.Unmarshal(fileData, &animes); err != nil {
-		fmt.Printf("Error parsing anime list: %v\n", err)
+		fmt.Printf("Error parsing anime list: %v", err)
 		return
 	}
 
 	// Load config to get the notification threshold (in hours)
 	cfg, err := LoadConfig()
 	if err != nil {
-		fmt.Printf("Could not load config, using default threshold (24h): %v\n", err)
+		fmt.Printf("Could not load config, using default threshold (24h): %v", err)
 		cfg = defaultConfig()
 	}
 	thresholdDuration := time.Duration(cfg.NotificationThresholdHours) * time.Hour
@@ -45,17 +45,22 @@ func CheckAiringAnime() {
 
 		d, err := time.ParseDuration(cleanDuration)
 		if err != nil {
-			fmt.Printf("Error parsing duration for %s: %v\n", anime.Title, err)
+			fmt.Printf("Error parsing duration for %s: %v", anime.Title, err)
 			continue
 		}
 
 		if d < thresholdDuration {
-			fmt.Printf("Status: Episode drops in less than %d hours!\n", cfg.NotificationThresholdHours)
+			fmt.Printf("Status: Episode drops in less than %d hours!", cfg.NotificationThresholdHours)
+
+			// Send desktop notification (existing behavior)
 			SendNotification(anime.Title, cleanDuration)
+
+			// Send Discord notification if enabled (new behavior)
+			SendDiscordNotificationIfEnabled(anime.Title, cleanDuration, anime.Score, anime.MalID)
 		}
 
 		exactTime := time.Now().Add(d)
-		fmt.Printf("Duration: %v\n", d)
-		fmt.Printf("Exact Release Time: %s\n", exactTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Duration: %v", d)
+		fmt.Printf("Exact Release Time: %s", exactTime.Format("2006-01-02 15:04:05"))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // AppConfig holds all user‑adjustable settings.
@@ -12,6 +13,8 @@ type AppConfig struct {
 	AutoSync                   bool   `json:"auto_sync"`
 	CalendarID                 string `json:"calendar_id"` // if empty, primary is used
 	NotificationThresholdHours int    `json:"notification_threshold_hours"`
+	DiscordWebhookURL          string `json:"discord_webhook_url,omitempty"`
+	DiscordEnabled             bool   `json:"discord_enabled"`
 }
 
 func defaultConfig() AppConfig {
@@ -19,6 +22,7 @@ func defaultConfig() AppConfig {
 		AutoSync:                   false,
 		CalendarID:                 "",
 		NotificationThresholdHours: 24,
+		DiscordEnabled:             false,
 	}
 }
 
@@ -41,13 +45,11 @@ func LoadConfig() (AppConfig, error) {
 		}
 		return defaultConfig(), fmt.Errorf("cannot read config: %w", err)
 	}
-
 	var cfg AppConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		// Corrupted file – return defaults but don't overwrite.
 		return defaultConfig(), fmt.Errorf("config broken, using defaults: %w", err)
 	}
-
 	// Make sure threshold is reasonable
 	if cfg.NotificationThresholdHours <= 0 {
 		cfg.NotificationThresholdHours = 24
@@ -62,11 +64,27 @@ func SaveConfig(cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-
 	// Atomic write: temp file -> rename
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// MaskWebhookURL returns a masked version of the webhook URL for safe display.
+func MaskWebhookURL(url string) string {
+	if url == "" {
+		return "(not set)"
+	}
+	// Format: https://discord.com/api/webhooks/123...***
+	parts := strings.Split(url, "/")
+	if len(parts) < 2 {
+		return "***"
+	}
+	last := parts[len(parts)-1]
+	if len(last) <= 8 {
+		return strings.Repeat("*", len(last))
+	}
+	return parts[len(parts)-2] + "/" + last[:4] + "..." + last[len(last)-4:]
 }

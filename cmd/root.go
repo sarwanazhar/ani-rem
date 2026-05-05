@@ -129,6 +129,7 @@ var rootCmd = &cobra.Command{
 					"View My Watchlist",
 					"Start Background Worker",
 					"Stop Background Worker",
+					"🎌 Discord Notifications",
 					"📅 Google Calendar",
 					"⚙️  Settings",
 					"Exit",
@@ -152,6 +153,8 @@ var rootCmd = &cobra.Command{
 				startCmd.Run(startCmd, args)
 			case "Stop Background Worker":
 				stopCmd.Run(stopCmd, args)
+			case "🎌 Discord Notifications":
+				discordCmd.Run(discordCmd, args)
 			case "📅 Google Calendar":
 				calendarCmd.Run(calendarCmd, args)
 			case "⚙️  Settings":
