@@ -9,9 +9,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -34,10 +31,8 @@ var startCmd = &cobra.Command{
 			child := exec.Command(os.Args[0], childArgs...)
 			child.Env = append(os.Environ(), "ANI_REM_CHILD=1")
 
-			// Detach process on Unix-like systems
-			if runtime.GOOS != "windows" {
-				child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			}
+			// Platform‑specific detach (Setpgid on Unix, no‑op on Windows)
+			setDetachAttr(child)
 
 			if err := child.Start(); err != nil {
 				fmt.Printf("Failed to start background worker: %v\n", err)
@@ -264,52 +259,4 @@ func syncOnceADay() {
 
 	_ = os.WriteFile(lastSyncFile, []byte(time.Now().String()), 0644)
 	fmt.Println("Auto-sync completed.")
-}
-
-// verifyProcess checks if a process with the given PID is running (cross-platform)
-func verifyProcess(pid string) error {
-	p, err := strconv.Atoi(pid)
-	if err != nil {
-		return err
-	}
-
-	if runtime.GOOS == "windows" {
-		// On Windows, try to query the process via tasklist
-		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", p))
-		output, err := cmd.Output()
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(string(output), pid) {
-			return fmt.Errorf("process not found")
-		}
-		return nil
-	}
-
-	// Unix-like: use kill -0 to check if process exists
-	return syscall.Kill(p, 0)
-}
-
-// killProcess terminates a process with the given PID (cross-platform)
-func killProcess(pid string) error {
-	p, err := strconv.Atoi(pid)
-	if err != nil {
-		return err
-	}
-
-	if runtime.GOOS == "windows" {
-		// Windows: use taskkill
-		cmd := exec.Command("taskkill", "/F", "/PID", pid)
-		return cmd.Run()
-	}
-
-	// Unix-like: use syscall.Kill with SIGTERM, then SIGKILL if needed
-	if err := syscall.Kill(p, syscall.SIGTERM); err != nil {
-		return err
-	}
-	// Give it a moment to terminate gracefully
-	time.Sleep(500 * time.Millisecond)
-	// Force kill if still running (ignore errors as process may already be gone)
-	syscall.Kill(p, syscall.SIGKILL)
-	return nil
 }
